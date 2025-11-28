@@ -1,5 +1,6 @@
 import datetime
 from typing import List
+from sqlalchemy import desc, func
 
 import orjson
 import sqlparse
@@ -8,7 +9,8 @@ from sqlalchemy.orm import aliased
 
 from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatQuestion, ChatLog, \
     TypeEnum, OperationEnum, ChatRecordResult
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.crud.recommended_problem import get_datasource_recommended, get_datasource_recommended_chart
+from apps.datasource.models.datasource import CoreDatasource, DsRecommendedProblem
 from apps.system.crud.assistant import AssistantOutDsFactory
 from common.core.deps import CurrentAssistant, SessionDep, CurrentUser
 from common.utils.utils import extract_nested_json
@@ -32,6 +34,21 @@ def list_chats(session: SessionDep, current_user: CurrentUser) -> List[Chat]:
     chart_list = session.query(Chat).filter(and_(Chat.create_by == current_user.id, Chat.oid == oid)).order_by(
         Chat.create_time.desc()).all()
     return chart_list
+
+
+def list_recent_questions(session: SessionDep, current_user: CurrentUser, datasource_id: int) -> List[str]:
+    chat_records = (
+        session.query(ChatRecord.question)
+        .filter(
+            ChatRecord.datasource == datasource_id,
+            ChatRecord.question.isnot(None)
+        )
+        .group_by(ChatRecord.question)
+        .order_by(desc(func.max(ChatRecord.create_time)))
+        .limit(10)
+        .all()
+    )
+    return [record[0] for record in chat_records] if chat_records else []
 
 
 def rename_chat(session: SessionDep, rename_object: RenameChat) -> str:
@@ -70,6 +87,7 @@ def get_chart_config(session: SessionDep, chart_record_id: int):
             pass
     return {}
 
+
 def format_chart_fields(chart_info: dict):
     fields = []
     if chart_info.get('columns') and len(chart_info.get('columns')) > 0:
@@ -87,6 +105,7 @@ def format_chart_fields(chart_info: dict):
                     column_str = column_str + '(' + column.get('name') + ')'
                 fields.append(column_str)
     return fields
+
 
 def get_last_execute_sql_error(session: SessionDep, chart_id: int):
     stmt = select(ChatRecord.error).where(and_(ChatRecord.chat_id == chart_id)).order_by(
@@ -396,6 +415,12 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
         record.finish = True
         record.create_time = datetime.datetime.now()
         record.create_by = current_user.id
+        if ds.recommended_config == 2:
+            questions = get_datasource_recommended_chart(session, ds.id)
+            record.recommended_question = orjson.dumps(questions).decode()
+            record.recommended_question_answer = orjson.dumps({
+                "content": questions
+            }).decode()
 
         _record = ChatRecord(**record.model_dump())
 

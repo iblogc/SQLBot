@@ -45,6 +45,7 @@ from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentAssistant, CurrentUser
 from common.error import SingleMessageError, SQLBotDBError, ParseSQLResultError, SQLBotDBConnectionError
+from common.utils.data_format import DataFormat
 from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_orjson
 
 warnings.filterwarnings("ignore")
@@ -523,7 +524,7 @@ class LLMService:
     def generate_sql(self, _session: Session):
         # append current question
         self.sql_message.append(HumanMessage(
-            self.chat_question.sql_user_question(current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))))
+            self.chat_question.sql_user_question(current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),change_title = self.change_title)))
 
         self.current_logs[OperationEnum.GENERATE_SQL] = start_log(session=_session,
                                                                   ai_modal_id=self.chat_question.ai_modal_id,
@@ -755,6 +756,26 @@ class LLMService:
 
         return chart_type
 
+    @staticmethod
+    def get_brief_from_sql_answer(res: str) -> Optional[str]:
+        json_str = extract_nested_json(res)
+        if json_str is None:
+            return None
+
+        brief: Optional[str]
+        data: dict
+        try:
+            data = orjson.loads(json_str)
+
+            if data['success']:
+                brief = data['brief']
+            else:
+                return None
+        except Exception:
+            return None
+
+        return brief
+
     def check_save_sql(self, session: Session, res: str) -> str:
         sql, *_ = self.check_sql(res=res)
         save_sql(session=session, sql=sql, record_id=self.record.id)
@@ -924,17 +945,6 @@ class LLMService:
             if not stream:
                 json_result['record_id'] = self.get_record().id
 
-            # return title
-            if self.change_title:
-                if self.chat_question.question and self.chat_question.question.strip() != '':
-                    brief = rename_chat(session=_session,
-                                        rename_object=RenameChat(id=self.get_record().chat_id,
-                                                                 brief=self.chat_question.question.strip()[:20]))
-                    if in_chat:
-                        yield 'data:' + orjson.dumps({'type': 'brief', 'brief': brief}).decode() + '\n\n'
-                    if not stream:
-                        json_result['title'] = brief
-
                 # select datasource if datasource is none
             if not self.ds:
                 ds_res = self.select_datasource(_session)
@@ -979,6 +989,19 @@ class LLMService:
             SQLBotLogUtil.info(full_sql_text)
 
             chart_type = self.get_chart_type_from_sql_answer(full_sql_text)
+
+            # return title
+            if self.change_title:
+                llm_brief = self.get_brief_from_sql_answer(full_sql_text)
+                if (llm_brief and llm_brief != '')  or (self.chat_question.question and self.chat_question.question.strip() != ''):
+                    save_brief = llm_brief if (llm_brief and llm_brief != '') else self.chat_question.question.strip()[:20]
+                    brief = rename_chat(session=_session,
+                                        rename_object=RenameChat(id=self.get_record().chat_id,
+                                                                 brief=save_brief))
+                    if in_chat:
+                        yield 'data:' + orjson.dumps({'type': 'brief', 'brief': brief}).decode() + '\n\n'
+                    if not stream:
+                        json_result['title'] = brief
 
             use_dynamic_ds: bool = self.current_assistant and self.current_assistant.type in dynamic_ds_types
             is_page_embedded: bool = self.current_assistant and self.current_assistant.type == 4
@@ -1039,14 +1062,14 @@ class LLMService:
 
             result = self.execute_sql(sql=real_execute_sql)
 
-            _data = self.convert_large_numbers_in_object_array(result.get('data'))
+            _data = DataFormat.convert_large_numbers_in_object_array(result.get('data'))
             result["data"] = _data
 
             self.save_sql_data(session=_session, data_obj=result)
             if in_chat:
                 yield 'data:' + orjson.dumps({'content': 'execute-success', 'type': 'sql-data'}).decode() + '\n\n'
             if not stream:
-                json_result['data'] = result.get('data')
+                json_result['data'] = get_chat_chart_data(_session, self.record.id)
 
             if finish_step.value <= ChatFinishStep.QUERY_DATA.value:
                 if stream:
@@ -1057,7 +1080,7 @@ class LLMService:
                         for field in result.get('fields'):
                             _column_list.append(AxisObj(name=field, value=field))
 
-                        md_data, _fields_list = self.convert_object_array_for_pandas(_column_list, result.get('data'))
+                        md_data, _fields_list = DataFormat.convert_object_array_for_pandas(_column_list, result.get('data'))
 
                         # data, _fields_list, col_formats = self.format_pd_data(_column_list, result.get('data'))
 
@@ -1065,7 +1088,7 @@ class LLMService:
                             yield 'The SQL execution result is empty.\n\n'
                         else:
                             df = pd.DataFrame(_data, columns=_fields_list)
-                            df_safe = self.safe_convert_to_string(df)
+                            df_safe = DataFormat.safe_convert_to_string(df)
                             markdown_table = df_safe.to_markdown(index=False)
                             yield markdown_table + '\n\n'
                 else:
@@ -1115,7 +1138,7 @@ class LLMService:
                         _column_list.append(
                             AxisObj(name=field if not _fields.get(field) else _fields.get(field), value=field))
 
-                    md_data, _fields_list = self.convert_object_array_for_pandas(_column_list, result.get('data'))
+                    md_data, _fields_list = DataFormat.convert_object_array_for_pandas(_column_list, result.get('data'))
 
                     # data, _fields_list, col_formats = self.format_pd_data(_column_list, result.get('data'))
 
@@ -1123,7 +1146,7 @@ class LLMService:
                         yield 'The SQL execution result is empty.\n\n'
                     else:
                         df = pd.DataFrame(md_data, columns=_fields_list)
-                        df_safe = self.safe_convert_to_string(df)
+                        df_safe = DataFormat.safe_convert_to_string(df)
                         markdown_table = df_safe.to_markdown(index=False)
                         yield markdown_table + '\n\n'
 
@@ -1131,14 +1154,19 @@ class LLMService:
                 yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
             else:
                 # todo generate picture
-                if chart['type'] != 'table':
-                    yield '### generated chart picture\n\n'
-                    image_url = request_picture(self.record.chat_id, self.record.id, chart, format_json_data(result))
-                    SQLBotLogUtil.info(image_url)
+                try:
+                    if chart['type'] != 'table':
+                        yield '### generated chart picture\n\n'
+                        image_url = request_picture(self.record.chat_id, self.record.id, chart,
+                                                    format_json_data(result))
+                        SQLBotLogUtil.info(image_url)
+                        if stream:
+                            yield f'![{chart["type"]}]({image_url})'
+                        else:
+                            json_result['image_url'] = image_url
+                except Exception as e:
                     if stream:
-                        yield f'![{chart["type"]}]({image_url})'
-                    else:
-                        json_result['image_url'] = image_url
+                        raise e
 
             if not stream:
                 yield json_result
@@ -1171,124 +1199,7 @@ class LLMService:
             self.finish(_session)
             session_maker.remove()
 
-    @staticmethod
-    def safe_convert_to_string(df):
-        """
-        安全地将数值列转换为字符串，避免科学记数法
-        """
-        df_copy = df.copy()
 
-        for col in df_copy.columns:
-            # 只处理数值类型的列
-            if pd.api.types.is_numeric_dtype(df_copy[col]):
-                try:
-                    df_copy[col] = df_copy[col].astype(str)
-                except Exception as e:
-                    print(f"列 {col} 转换失败: {e}")
-                    # 如果转换失败，保持原样
-                    continue
-
-        return df_copy
-
-    @staticmethod
-    def convert_large_numbers_in_object_array(obj_array, int_threshold=1e15, float_threshold=1e10):
-        """处理对象数组，将每个对象中的大数字转换为字符串"""
-
-        def format_float_without_scientific(value):
-            """格式化浮点数，避免科学记数法"""
-            if value == 0:
-                return "0"
-            formatted = f"{value:.15f}"
-            if '.' in formatted:
-                formatted = formatted.rstrip('0').rstrip('.')
-            return formatted
-
-        def process_object(obj):
-            """处理单个对象"""
-            if not isinstance(obj, dict):
-                return obj
-
-            processed_obj = {}
-            for key, value in obj.items():
-                if isinstance(value, (int, float)):
-                    # 只转换大数字
-                    if isinstance(value, int) and abs(value) >= int_threshold:
-                        processed_obj[key] = str(value)
-                    elif isinstance(value, float) and (abs(value) >= float_threshold or abs(value) < 1e-6):
-                        processed_obj[key] = format_float_without_scientific(value)
-                    else:
-                        processed_obj[key] = value
-                elif isinstance(value, dict):
-                    # 处理嵌套对象
-                    processed_obj[key] = process_object(value)
-                elif isinstance(value, list):
-                    # 处理对象中的数组
-                    processed_obj[key] = [process_item(item) for item in value]
-                else:
-                    processed_obj[key] = value
-            return processed_obj
-
-        def process_item(item):
-            """处理数组中的项目"""
-            if isinstance(item, dict):
-                return process_object(item)
-            return item
-
-        return [process_item(obj) for obj in obj_array]
-
-    @staticmethod
-    def convert_object_array_for_pandas(column_list: list, data_list: list):
-        _fields_list = []
-        for field_idx, field in enumerate(column_list):
-            _fields_list.append(field.name)
-
-        md_data = []
-        for inner_data in data_list:
-            _row = []
-            for field_idx, field in enumerate(column_list):
-                value = inner_data.get(field.value)
-                _row.append(value)
-            md_data.append(_row)
-        return md_data, _fields_list
-
-    @staticmethod
-    def format_pd_data(column_list: list, data_list: list, col_formats: dict = None):
-        # 预处理数据并记录每列的格式类型
-        # 格式类型：'text'（文本）、'number'（数字）、'default'（默认）
-        _fields_list = []
-
-        if col_formats is None:
-            col_formats = {}
-        for field_idx, field in enumerate(column_list):
-            _fields_list.append(field.name)
-            col_formats[field_idx] = 'default'  # 默认不特殊处理
-
-        data = []
-
-        for _data in data_list:
-            _row = []
-            for field_idx, field in enumerate(column_list):
-                value = _data.get(field.value)
-                if value is not None:
-                    # 检查是否为数字且需要特殊处理
-                    if isinstance(value, (int, float)):
-                        # 整数且超过15位 → 转字符串并标记为文本列
-                        if isinstance(value, int) and len(str(abs(value))) > 15:
-                            value = str(value)
-                            col_formats[field_idx] = 'text'
-                        # 小数且超过15位有效数字 → 转字符串并标记为文本列
-                        elif isinstance(value, float):
-                            decimal_str = format(value, '.16f').rstrip('0').rstrip('.')
-                            if len(decimal_str) > 15:
-                                value = str(value)
-                                col_formats[field_idx] = 'text'
-                        # 其他数字列标记为数字格式（避免科学记数法）
-                        elif col_formats[field_idx] != 'text':
-                            col_formats[field_idx] = 'number'
-                _row.append(value)
-            data.append(_row)
-
-        return data, _fields_list, col_formats
 
     def run_recommend_questions_task_async(self):
         self.future = executor.submit(self.run_recommend_questions_task_cache)
