@@ -8,12 +8,13 @@
       :larksuite="loginCategory.larksuite"
     />
   </div> -->
+  <LdapLoginForm v-if="isLdap" />
   <el-divider v-if="anyEnable" class="de-other-login-divider">{{
     t('login.other_login')
   }}</el-divider>
   <el-form-item v-if="anyEnable" class="other-login-item">
     <div class="login-list">
-      <!-- <QrcodeLdap
+      <QrcodeLdap
         v-if="loginCategory.qrcode || loginCategory.ldap"
         ref="qrcodeLdapHandler"
         :qrcode="loginCategory.qrcode"
@@ -21,7 +22,7 @@
         @status-change="qrStatusChange"
       />
       <Oidc v-if="loginCategory.oidc" @switch-category="switcherCategory" />
-      <Oauth2 v-if="loginCategory.oauth2" ref="oauth2Handler" @switch-category="switcherCategory" /> -->
+      <Oauth2 v-if="loginCategory.oauth2" ref="oauth2Handler" @switch-category="switcherCategory" />
       <Cas v-if="loginCategory.cas" @switch-category="switcherCategory" />
       <!-- <Saml2 v-if="loginCategory.saml2" ref="saml2Handler" @switch-category="switcherCategory" /> -->
     </div>
@@ -29,27 +30,49 @@
 
   <!-- <mfa-step v-if="showMfa" :mfa-data="state.mfaData" @close="showMfa = false" />
   <platform-error v-if="platformLoginMsg" :msg="platformLoginMsg" /> -->
+  <el-dialog
+    v-model="loginDialogVisible"
+    :title="dialogTitle"
+    width="420"
+    :destroy-on-close="true"
+    :close-on-click-modal="false"
+    modal-class="login-platform-dialog"
+    @closed="closeHandler"
+  >
+    <template #footer>
+      <div class="dialog-footer">
+        <el-button @click="closeHandler">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="redirectImmediately">
+          {{ t('login.redirect_immediately') }}
+        </el-button>
+      </div>
+    </template>
+  </el-dialog>
 </template>
 
 <script lang="ts" setup>
 import { ref, onMounted } from 'vue'
-/* import QrcodeLdap from './QrcodeLdap.vue'
-import Oidc from './Oidc.vue'
+import QrcodeLdap from './QrcodeLdap.vue'
+import LdapLoginForm from './LdapLoginForm.vue'
+/* import Oidc from './Oidc.vue'
 import Oauth2 from './Oauth2.vue'
 import Saml2 from './Saml2.vue' */
+import Oidc from './Oidc.vue'
 import Cas from './Cas.vue'
+import Oauth2 from './Oauth2.vue'
 // import QrTab from './QrTab.vue'
 import { request } from '@/utils/request'
 import { useCache } from '@/utils/useCache'
 
 import router from '@/router'
 import { useUserStore } from '@/stores/user.ts'
-import { getQueryString, isPlatformClient } from '@/utils/utils'
+import { getQueryString, getUrlParams, isPlatformClient } from '@/utils/utils'
 import { loadClient, type LoginCategory } from './PlatformClient'
 // import MfaStep from './MfaStep.vue'
 // import { logoutHandler } from '@/utils/logout'
 import { useI18n } from 'vue-i18n'
 // import PlatformError from './PlatformError.vue'
+const isLdap = ref(false)
 defineProps<{
   loading: boolean
 }>()
@@ -62,6 +85,17 @@ interface Categoryparam {
   category: string
   proxy?: string
 }
+const loginDialogVisible = ref(false)
+const dialogTitle = ref('')
+const dialogInterval = ref<any>(null)
+const currentCancelHandler = ref<((reason?: string) => void) | null>(null)
+const currentSureHandler = ref<(() => void) | null>(null)
+interface RedirectDialogResult {
+  promise: Promise<boolean>
+  sure: () => void
+  cancel: (reason?: string) => void
+}
+
 const platformLoginMsg = ref('')
 const { wsCache } = useCache()
 const userStore = useUserStore()
@@ -77,6 +111,83 @@ const saml2Handler = ref()
     ready: false,
   },
 }) */
+
+const openDialog = (origin_text: string): RedirectDialogResult => {
+  const platforms: { [key: string]: string } = {
+    cas: 'CAS',
+    oidc: 'OIDC',
+    ldap: 'LDAP',
+    oauth2: 'OAuth2',
+    saml2: 'Saml2',
+  }
+
+  let timer = 3
+  const platFormName = platforms[origin_text] || 'SSO'
+  dialogTitle.value = t('login.redirect_2_auth', [platFormName, timer])
+
+  let rejectPromise: ((reason?: any) => void) | null = null
+  let resolvePromise: ((value: boolean | PromiseLike<boolean>) => void) | null = null
+  loginDialogVisible.value = true
+
+  const promise = new Promise<boolean>((resolve, reject) => {
+    rejectPromise = reject
+    resolvePromise = resolve
+    dialogInterval.value = setInterval(() => {
+      if (timer-- <= 0) {
+        clearInterval(dialogInterval.value)
+        closeDialog()
+        resolve(true)
+        return
+      }
+      dialogTitle.value = t('login.redirect_2_auth', [platFormName, timer])
+    }, 1000)
+  })
+  const sure = (): void => {
+    if (dialogInterval.value) {
+      clearInterval(dialogInterval.value)
+      dialogInterval.value = null
+    }
+    closeDialog()
+    if (resolvePromise) {
+      resolvePromise(true)
+      resolvePromise = null
+    }
+  }
+  const cancel = (reason: string = '用户取消跳转'): void => {
+    if (dialogInterval.value) {
+      clearInterval(dialogInterval.value)
+      dialogInterval.value = null
+    }
+    closeDialog()
+
+    if (rejectPromise) {
+      rejectPromise(new Error(reason))
+      rejectPromise = null
+    }
+  }
+  return {
+    promise,
+    sure,
+    cancel,
+  }
+}
+const closeHandler = () => {
+  if (currentCancelHandler.value) {
+    currentCancelHandler.value('手动取消')
+  }
+}
+const closeDialog = () => {
+  loginDialogVisible.value = false
+  /* if (loginDialogVisible.value) {
+    clearInterval(dialogInterval.value)
+    dialogInterval.value = null
+  } */
+}
+const redirectImmediately = () => {
+  if (currentSureHandler.value) {
+    currentSureHandler.value()
+  }
+}
 const init = (cb?: () => void) => {
   queryCategoryStatus()
     .then((res) => {
@@ -103,14 +214,16 @@ const init = (cb?: () => void) => {
     })
 }
 
-/* const qrStatusChange = (activeComponent: string) => {
+const qrStatusChange = (activeComponent: string) => {
   qrStatus.value = activeComponent === 'qrcode'
+  isLdap.value = false
   if (activeComponent === 'account') {
     emits('switchTab', 'simple')
   } else if (activeComponent === 'ldap') {
+    isLdap.value = true
     switcherCategory({ category: 'ldap', proxy: '' })
   }
-} */
+}
 /* const showMfa = ref(false)
 const toMfa = (mfa) => {
   state.mfaData = mfa
@@ -135,7 +248,7 @@ const toMfa = (mfa) => {
   }
 } */
 
-const switcherCategory = (param: Categoryparam) => {
+const switcherCategory = async (param: Categoryparam) => {
   const { category, proxy } = param
   const curOrigin = window.location.origin
   const curLocation = getCurLocation()
@@ -144,13 +257,38 @@ const switcherCategory = (param: Categoryparam) => {
     emits('switchTab', category || 'simple')
     return
   }
+
+  const { promise, sure, cancel } = openDialog(category)
+  currentCancelHandler.value = cancel
+  currentSureHandler.value = sure
+  let shouldRedirect = false
+  try {
+    shouldRedirect = await promise
+  } finally {
+    currentCancelHandler.value = null
+    currentSureHandler.value = null
+  }
+  if (!shouldRedirect) {
+    return
+  }
+
   let pathname = window.location.pathname
   if (pathname) {
     pathname = pathname.substring(0, pathname.length - 1)
   }
   const nextPage = curOrigin + pathname + proxy + curLocation
   if (category === 'oauth2') {
-    oauth2Handler?.value?.toLoginPage()
+    request.get('/system/authentication/login/4').then((res: any) => {
+      window.location.href = res
+      window.open(res, '_self')
+    })
+    return
+  }
+  if (category === 'oidc') {
+    request.get('/system/authentication/login/2').then((res: any) => {
+      window.location.href = res
+      window.open(res, '_self')
+    })
     return
   }
   if (category === 'saml2') {
@@ -176,9 +314,10 @@ const getCurLocation = () => {
 }
 
 const casLogin = () => {
+  const urlParams = getUrlParams()
   const ticket = getQueryString('ticket')
   request
-    .get('/system/authentication/sso/cas?ticket=' + ticket)
+    .post('/system/authentication/sso/1', urlParams)
     .then((res: any) => {
       const token = res.access_token
       if (token && isPlatformClient()) {
@@ -191,6 +330,72 @@ const casLogin = () => {
         flag: 'cas',
         data: ticket,
         origin: 1,
+      })
+      const queryRedirectPath = getCurLocation()
+      router.push({ path: queryRedirectPath })
+    })
+    .catch((e: any) => {
+      userStore.setToken('')
+      setTimeout(() => {
+        // logoutHandler(true, true)
+        platformLoginMsg.value = e?.message || e
+        setTimeout(() => {
+          window.location.href =
+            window.location.origin + window.location.pathname + window.location.hash
+        }, 2000)
+      }, 1500)
+    })
+}
+const oauth2Login = () => {
+  const urlParams = getUrlParams()
+  request
+    .post('/system/authentication/sso/4', urlParams)
+    .then((res: any) => {
+      const token = res.access_token
+      const platform_info = res.platform_info
+      if (token && isPlatformClient()) {
+        wsCache.set('de-platform-client', true)
+      }
+      userStore.setToken(token)
+      userStore.setExp(res.exp)
+      userStore.setTime(Date.now())
+      userStore.setPlatformInfo({
+        flag: 'oauth2',
+        data: platform_info ? JSON.stringify(platform_info) : '',
+        origin: 4,
+      })
+      const queryRedirectPath = getCurLocation()
+      router.push({ path: queryRedirectPath })
+    })
+    .catch((e: any) => {
+      userStore.setToken('')
+      setTimeout(() => {
+        // logoutHandler(true, true)
+        platformLoginMsg.value = e?.message || e
+        setTimeout(() => {
+          window.location.href =
+            window.location.origin + window.location.pathname + window.location.hash
+        }, 2000)
+      }, 1500)
+    })
+}
+const oidcLogin = () => {
+  const urlParams = getUrlParams()
+  request
+    .post('/system/authentication/sso/2', urlParams)
+    .then((res: any) => {
+      const token = res.access_token
+      const platform_info = res.platform_info
+      if (token && isPlatformClient()) {
+        wsCache.set('de-platform-client', true)
+      }
+      userStore.setToken(token)
+      userStore.setExp(res.exp)
+      userStore.setTime(Date.now())
+      userStore.setPlatformInfo({
+        flag: 'oidc',
+        data: platform_info ? JSON.stringify(platform_info) : '',
+        origin: 2,
       })
       const queryRedirectPath = getCurLocation()
       router.push({ path: queryRedirectPath })
@@ -384,6 +589,10 @@ onMounted(() => {
     if (state?.includes('cas') && getQueryString('ticket')) {
       // platformLogin(1)
       casLogin()
+    } else if (state?.includes('oauth2')) {
+      oauth2Login()
+    } else if (state?.includes('oidc')) {
+      oidcLogin()
     } else {
       updateLoading(false)
     }
