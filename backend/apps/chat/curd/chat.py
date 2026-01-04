@@ -1,16 +1,18 @@
 import datetime
-from typing import List
+from typing import List, Optional
 
 import orjson
 import sqlparse
 from sqlalchemy import and_, select, update
+from sqlalchemy import desc, func
 from sqlalchemy.orm import aliased
 
 from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatQuestion, ChatLog, \
     TypeEnum, OperationEnum, ChatRecordResult
+from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
 from apps.system.crud.assistant import AssistantOutDsFactory
-from common.core.deps import CurrentAssistant, SessionDep, CurrentUser
+from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans
 from common.utils.utils import extract_nested_json
 
 
@@ -27,6 +29,12 @@ def get_chat_record_by_id(session: SessionDep, record_id: int):
     return record
 
 
+def get_chat(session: SessionDep, chat_id: int) -> Chat:
+    statement = select(Chat).where(Chat.id == chat_id)
+    chat = session.exec(statement).scalars().first()
+    return chat
+
+
 def list_chats(session: SessionDep, current_user: CurrentUser) -> List[Chat]:
     oid = current_user.oid if current_user.oid is not None else 1
     chart_list = session.query(Chat).filter(and_(Chat.create_by == current_user.id, Chat.oid == oid)).order_by(
@@ -34,12 +42,46 @@ def list_chats(session: SessionDep, current_user: CurrentUser) -> List[Chat]:
     return chart_list
 
 
+def list_recent_questions(session: SessionDep, current_user: CurrentUser, datasource_id: int) -> List[str]:
+    chat_records = (
+        session.query(
+            ChatRecord.question
+        )
+        .join(Chat, ChatRecord.chat_id == Chat.id)  # 关联Chat表
+        .filter(
+            Chat.datasource == datasource_id,  # 使用Chat表的datasource字段
+            ChatRecord.question.isnot(None)
+        )
+        .group_by(ChatRecord.question)
+        .order_by(desc(func.max(ChatRecord.create_time)))
+        .limit(10)
+        .all()
+    )
+    return [record[0] for record in chat_records] if chat_records else []
+
+def rename_chat_with_user(session: SessionDep, current_user: CurrentUser, rename_object: RenameChat) -> str:
+    chat = session.get(Chat, rename_object.id)
+    if not chat:
+        raise Exception(f"Chat with id {rename_object.id} not found")
+    if chat.create_by != current_user.id:
+        raise Exception(f"Chat with id {rename_object.id} not Owned by the current user")
+    chat.brief = rename_object.brief.strip()[:20]
+    chat.brief_generate = rename_object.brief_generate
+    session.add(chat)
+    session.flush()
+    session.refresh(chat)
+
+    brief = chat.brief
+    session.commit()
+    return brief
+
 def rename_chat(session: SessionDep, rename_object: RenameChat) -> str:
     chat = session.get(Chat, rename_object.id)
     if not chat:
         raise Exception(f"Chat with id {rename_object.id} not found")
 
     chat.brief = rename_object.brief.strip()[:20]
+    chat.brief_generate = rename_object.brief_generate
     session.add(chat)
     session.flush()
     session.refresh(chat)
@@ -59,6 +101,17 @@ def delete_chat(session, chart_id) -> str:
 
     return f'Chat with id {chart_id} has been deleted'
 
+def delete_chat_with_user(session, current_user: CurrentUser, chart_id) -> str:
+    chat = session.query(Chat).filter(Chat.id == chart_id).first()
+    if not chat:
+        return f'Chat with id {chart_id} has been deleted'
+    if chat.create_by != current_user.id:
+        raise Exception(f"Chat with id {chart_id} not Owned by the current user")
+    session.delete(chat)
+    session.commit()
+
+    return f'Chat with id {chart_id} has been deleted'
+
 
 def get_chart_config(session: SessionDep, chart_record_id: int):
     stmt = select(ChatRecord.chart).where(and_(ChatRecord.id == chart_record_id))
@@ -69,6 +122,7 @@ def get_chart_config(session: SessionDep, chart_record_id: int):
         except Exception:
             pass
     return {}
+
 
 def format_chart_fields(chart_info: dict):
     fields = []
@@ -87,6 +141,7 @@ def format_chart_fields(chart_info: dict):
                     column_str = column_str + '(' + column.get('name') + ')'
                 fields.append(column_str)
     return fields
+
 
 def get_last_execute_sql_error(session: SessionDep, chart_id: int):
     stmt = select(ChatRecord.error).where(and_(ChatRecord.chat_id == chart_id)).order_by(
@@ -134,6 +189,26 @@ def format_json_list_data(origin_data: list[dict]):
     return data
 
 
+def get_chat_chart_config(session: SessionDep, chat_record_id: int):
+    stmt = select(ChatRecord.chart).where(and_(ChatRecord.id == chat_record_id))
+    res = session.execute(stmt)
+    for row in res:
+        try:
+            return orjson.loads(row.chart)
+        except Exception:
+            pass
+    return {}
+
+def get_chart_data_with_user(session: SessionDep, current_user: CurrentUser, chat_record_id: int):
+    stmt = select(ChatRecord.data).where(and_(ChatRecord.id == chat_record_id, ChatRecord.create_by == current_user.id))
+    res = session.execute(stmt)
+    for row in res:
+        try:
+            return orjson.loads(row.data)
+        except Exception:
+            pass
+    return {}
+
 def get_chat_chart_data(session: SessionDep, chat_record_id: int):
     stmt = select(ChatRecord.data).where(and_(ChatRecord.id == chat_record_id))
     res = session.execute(stmt)
@@ -144,6 +219,15 @@ def get_chat_chart_data(session: SessionDep, chat_record_id: int):
             pass
     return {}
 
+def get_chat_predict_data_with_user(session: SessionDep, current_user: CurrentUser, chat_record_id: int):
+    stmt = select(ChatRecord.predict_data).where(and_(ChatRecord.id == chat_record_id, ChatRecord.create_by == current_user.id))
+    res = session.execute(stmt)
+    for row in res:
+        try:
+            return orjson.loads(row.predict_data)
+        except Exception:
+            pass
+    return {}
 
 def get_chat_predict_data(session: SessionDep, chat_record_id: int):
     stmt = select(ChatRecord.predict_data).where(and_(ChatRecord.id == chat_record_id))
@@ -165,16 +249,18 @@ dynamic_ds_types = [1, 3]
 
 
 def get_chat_with_records(session: SessionDep, chart_id: int, current_user: CurrentUser,
-                          current_assistant: CurrentAssistant, with_data: bool = False) -> ChatInfo:
+                          current_assistant: CurrentAssistant, with_data: bool = False,
+                          trans: Trans = None) -> ChatInfo:
     chat = session.get(Chat, chart_id)
     if not chat:
         raise Exception(f"Chat with id {chart_id} not found")
-
+    if chat.create_by != current_user.id:
+        raise Exception(f"Chat with id {chart_id} not Owned by the current user")
     chat_info = ChatInfo(**chat.model_dump())
 
     if current_assistant and current_assistant.type in dynamic_ds_types:
         out_ds_instance = AssistantOutDsFactory.get_instance(current_assistant)
-        ds = out_ds_instance.get_ds(chat.datasource)
+        ds = out_ds_instance.get_ds(chat.datasource, trans)
     else:
         ds = session.get(CoreDatasource, chat.datasource) if chat.datasource else None
 
@@ -195,6 +281,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                    ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql,
                    ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.analysis, ChatRecord.predict,
                    ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
+                   ChatRecord.regenerate_record_id,
                    ChatRecord.recommended_question, ChatRecord.first_chat,
                    ChatRecord.finish, ChatRecord.error,
                    sql_alias_log.reasoning_content.label('sql_reasoning_content'),
@@ -221,6 +308,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                       ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql,
                       ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.analysis, ChatRecord.predict,
                       ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
+                      ChatRecord.regenerate_record_id,
                       ChatRecord.recommended_question, ChatRecord.first_chat,
                       ChatRecord.finish, ChatRecord.error, ChatRecord.data, ChatRecord.predict_data).where(
             and_(ChatRecord.create_by == current_user.id, ChatRecord.chat_id == chart_id)).order_by(
@@ -238,6 +326,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  analysis=row.analysis, predict=row.predict,
                                  datasource_select_answer=row.datasource_select_answer,
                                  analysis_record_id=row.analysis_record_id, predict_record_id=row.predict_record_id,
+                                 regenerate_record_id=row.regenerate_record_id,
                                  recommended_question=row.recommended_question, first_chat=row.first_chat,
                                  finish=row.finish, error=row.error,
                                  sql_reasoning_content=row.sql_reasoning_content,
@@ -254,6 +343,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  analysis=row.analysis, predict=row.predict,
                                  datasource_select_answer=row.datasource_select_answer,
                                  analysis_record_id=row.analysis_record_id, predict_record_id=row.predict_record_id,
+                                 regenerate_record_id=row.regenerate_record_id,
                                  recommended_question=row.recommended_question, first_chat=row.first_chat,
                                  finish=row.finish, error=row.error, data=row.data, predict_data=row.predict_data))
 
@@ -320,6 +410,14 @@ def format_record(record: ChatRecordResult):
             pass
 
     return _dict
+
+
+def get_chat_brief_generate(session: SessionDep, chat_id: int):
+    chat = get_chat(session=session, chat_id=chat_id)
+    if chat is not None and chat.brief_generate is not None:
+        return chat.brief_generate
+    else:
+        return False
 
 
 def list_generate_sql_logs(session: SessionDep, chart_id: int) -> List[ChatLog]:
@@ -396,6 +494,12 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
         record.finish = True
         record.create_time = datetime.datetime.now()
         record.create_by = current_user.id
+        if ds.recommended_config == 2:
+            questions = get_datasource_recommended_chart(session, ds.id)
+            record.recommended_question = orjson.dumps(questions).decode()
+            record.recommended_question_answer = orjson.dumps({
+                "content": questions
+            }).decode()
 
         _record = ChatRecord(**record.model_dump())
 
@@ -429,6 +533,7 @@ def save_question(session: SessionDep, current_user: CurrentUser, question: Chat
     record.datasource = chat.datasource
     record.engine_type = chat.engine_type
     record.ai_modal_id = question.ai_modal_id
+    record.regenerate_record_id = question.regenerate_record_id
 
     result = ChatRecord(**record.model_dump())
 
@@ -590,7 +695,7 @@ def save_select_datasource_answer(session: SessionDep, record_id: int, answer: s
 
 
 def save_recommend_question_answer(session: SessionDep, record_id: int,
-                                   answer: dict = None) -> ChatRecord:
+                                   answer: dict = None, articles_number: Optional[int] = 4) -> ChatRecord:
     if not record_id:
         raise Exception("Record id cannot be None")
 
@@ -613,12 +718,19 @@ def save_recommend_question_answer(session: SessionDep, record_id: int,
     )
 
     session.execute(stmt)
-
     session.commit()
 
     record = get_chat_record_by_id(session, record_id)
     record.recommended_question_answer = recommended_question_answer
     record.recommended_question = recommended_question
+    if articles_number > 4:
+        stmt_chat = update(Chat).where(and_(Chat.id == record.chat_id)).values(
+            recommended_question_answer=recommended_question_answer,
+            recommended_question=recommended_question,
+            recommended_generate=True
+        )
+        session.execute(stmt_chat)
+        session.commit()
 
     return record
 

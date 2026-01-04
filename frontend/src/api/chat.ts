@@ -51,6 +51,7 @@ export class ChatRecord {
   recommended_question?: string
   analysis_record_id?: number
   predict_record_id?: number
+  regenerate_record_id?: number
 
   constructor()
   constructor(
@@ -75,7 +76,8 @@ export class ChatRecord {
     first_chat: boolean,
     recommended_question: string | undefined,
     analysis_record_id: number | undefined,
-    predict_record_id: number | undefined
+    predict_record_id: number | undefined,
+    regenerate_record_id: number | undefined
   )
   constructor(
     id?: number,
@@ -99,7 +101,8 @@ export class ChatRecord {
     first_chat?: boolean,
     recommended_question?: string,
     analysis_record_id?: number,
-    predict_record_id?: number
+    predict_record_id?: number,
+    regenerate_record_id?: number
   ) {
     this.id = id
     this.chat_id = chat_id
@@ -123,6 +126,7 @@ export class ChatRecord {
     this.recommended_question = recommended_question
     this.analysis_record_id = analysis_record_id
     this.predict_record_id = predict_record_id
+    this.regenerate_record_id = regenerate_record_id
   }
 }
 
@@ -135,6 +139,8 @@ export class Chat {
   datasource?: number
   engine_type?: string
   ds_type?: string
+  recommended_question?: string | undefined
+  recommended_generate?: boolean | undefined
 
   constructor()
   constructor(
@@ -183,7 +189,9 @@ export class ChatInfo extends Chat {
     ds_type: string,
     datasource_name: string,
     datasource_exists: boolean,
-    records: Array<ChatRecord>
+    records: Array<ChatRecord>,
+    recommended_question?: string | undefined,
+    recommended_generate?: boolean | undefined
   )
   constructor(
     param1?: number | Chat,
@@ -196,7 +204,9 @@ export class ChatInfo extends Chat {
     ds_type?: string,
     datasource_name?: string,
     datasource_exists: boolean = true,
-    records: Array<ChatRecord> = []
+    records: Array<ChatRecord> = [],
+    recommended_question?: string | undefined,
+    recommended_generate?: boolean | undefined
   ) {
     super()
     if (param1 !== undefined) {
@@ -209,6 +219,8 @@ export class ChatInfo extends Chat {
         this.datasource = param1.datasource
         this.engine_type = param1.engine_type
         this.ds_type = param1.ds_type
+        this.recommended_question = recommended_question
+        this.recommended_generate = recommended_generate
       } else {
         this.id = param1
         this.create_time = getDate(create_time)
@@ -218,6 +230,8 @@ export class ChatInfo extends Chat {
         this.datasource = datasource
         this.engine_type = engine_type
         this.ds_type = ds_type
+        this.recommended_question = recommended_question
+        this.recommended_generate = recommended_generate
       }
     }
     this.datasource_name = datasource_name
@@ -252,7 +266,8 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
     data.first_chat,
     data.recommended_question,
     data.analysis_record_id,
-    data.predict_record_id
+    data.predict_record_id,
+    data.regenerate_record_id
   )
 }
 const toChatRecordList = (list: any = []): ChatRecord[] => {
@@ -282,7 +297,9 @@ export const chatApi = {
       data.ds_type,
       data.datasource_name,
       data.datasource_exists,
-      toChatRecordList(data.records)
+      toChatRecordList(data.records),
+      data.recommended_question,
+      data.recommended_generate
     )
   },
   toChatInfoList: (list: any[] = []): ChatInfo[] => {
@@ -319,8 +336,8 @@ export const chatApi = {
   renameChat: (chat_id: number | undefined, brief: string): Promise<string> => {
     return request.post('/chat/rename', { id: chat_id, brief: brief })
   },
-  deleteChat: (id: number | undefined): Promise<string> => {
-    return request.delete(`/chat/${id}`)
+  deleteChat: (id: number | undefined, brief: any): Promise<string> => {
+    return request.delete(`/chat/${id}/${brief}`)
   },
   analysis: (record_id: number | undefined, controller?: AbortController) => {
     return request.fetchStream(`/chat/record/${record_id}/analysis`, {}, controller)
@@ -328,12 +345,19 @@ export const chatApi = {
   predict: (record_id: number | undefined, controller?: AbortController) => {
     return request.fetchStream(`/chat/record/${record_id}/predict`, {}, controller)
   },
-  recommendQuestions: (record_id: number | undefined, controller?: AbortController) => {
-    return request.fetchStream(`/chat/recommend_questions/${record_id}`, {}, controller)
+  recommendQuestions: (
+    record_id: number | undefined,
+    controller?: AbortController,
+    params?: any
+  ) => {
+    return request.fetchStream(`/chat/recommend_questions/${record_id}${params}`, {}, controller)
+  },
+  recentQuestions: (datasource_id?: number): Promise<any> => {
+    return request.get(`/chat/recent_questions/${datasource_id}`)
   },
   checkLLMModel: () => request.get('/system/aimodel/default', { requestOptions: { silent: true } }),
-  export2Excel: (record_id: number | undefined) =>
-    request.get(`/chat/record/${record_id}/excel/export`, {
+  export2Excel: (record_id: number | undefined, chat_id: any) =>
+    request.get(`/chat/record/${record_id}/excel/export/${chat_id}`, {
       responseType: 'blob',
       requestOptions: { customError: true },
     }),

@@ -3,11 +3,12 @@ import os
 from datetime import timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Path, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlbot_xpack.file_utils import SQLBotFileUtils
 from sqlmodel import select
 
+from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from apps.system.crud.assistant import get_assistant_info
 from apps.system.crud.assistant_manage import dynamic_upgrade_cors, save
 from apps.system.models.system_model import AssistantModel
@@ -17,12 +18,14 @@ from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.core.security import create_access_token
 from common.core.sqlbot_cache import clear_cache
-from common.utils.utils import get_origin_from_referer
+from common.utils.utils import get_origin_from_referer, origin_match_domain
 
-router = APIRouter(tags=["system/assistant"], prefix="/system/assistant")
+router = APIRouter(tags=["system_assistant"], prefix="/system/assistant")
+from common.audit.models.log_model import OperationType, OperationModules
+from common.audit.schemas.logger_decorator import LogConfig, system_log
 
 
-@router.get("/info/{id}")
+@router.get("/info/{id}", include_in_schema=False)
 async def info(request: Request, response: Response, session: SessionDep, trans: Trans, id: int) -> AssistantModel:
     if not id:
         raise Exception('miss assistant id')
@@ -30,17 +33,19 @@ async def info(request: Request, response: Response, session: SessionDep, trans:
     if not db_model:
         raise RuntimeError(f"assistant application not exist")
     db_model = AssistantModel.model_validate(db_model)
-    response.headers["Access-Control-Allow-Origin"] = db_model.domain
+    
     origin = request.headers.get("origin") or get_origin_from_referer(request)
     if not origin:
         raise RuntimeError(trans('i18n_embedded.invalid_origin', origin=origin or ''))
     origin = origin.rstrip('/')
-    if origin != db_model.domain:
+    if not origin_match_domain(origin, db_model.domain):
         raise RuntimeError(trans('i18n_embedded.invalid_origin', origin=origin or ''))
+    
+    response.headers["Access-Control-Allow-Origin"] = origin
     return db_model
 
 
-@router.get("/app/{appId}")
+@router.get("/app/{appId}", include_in_schema=False)
 async def getApp(request: Request, response: Response, session: SessionDep, trans: Trans, appId: str) -> AssistantModel:
     if not appId:
         raise Exception('miss assistant appId')
@@ -48,17 +53,18 @@ async def getApp(request: Request, response: Response, session: SessionDep, tran
     if not db_model:
         raise RuntimeError(f"assistant application not exist")
     db_model = AssistantModel.model_validate(db_model)
-    response.headers["Access-Control-Allow-Origin"] = db_model.domain
     origin = request.headers.get("origin") or get_origin_from_referer(request)
     if not origin:
         raise RuntimeError(trans('i18n_embedded.invalid_origin', origin=origin or ''))
     origin = origin.rstrip('/')
-    if origin != db_model.domain:
+    if not origin_match_domain(origin, db_model.domain):
         raise RuntimeError(trans('i18n_embedded.invalid_origin', origin=origin or ''))
+    
+    response.headers["Access-Control-Allow-Origin"] = origin
     return db_model
 
 
-@router.get("/validator", response_model=AssistantValidator)
+@router.get("/validator", response_model=AssistantValidator, include_in_schema=False)
 async def validator(session: SessionDep, id: int, virtual: Optional[int] = Query(None)):
     if not id:
         raise Exception('miss assistant id')
@@ -83,8 +89,8 @@ async def validator(session: SessionDep, id: int, virtual: Optional[int] = Query
     return AssistantValidator(True, True, True, access_token)
 
 
-@router.get('/picture/{file_id}')
-async def picture(file_id: str):
+@router.get('/picture/{file_id}', summary=f"{PLACEHOLDER_PREFIX}assistant_picture_api", description=f"{PLACEHOLDER_PREFIX}assistant_picture_api")
+async def picture(file_id: str = Path(description="file_id")):
     file_path = SQLBotFileUtils.get_file_path(file_id=file_id)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
@@ -101,7 +107,8 @@ async def picture(file_id: str):
     return StreamingResponse(iterfile(), media_type=media_type)
 
 
-@router.patch('/ui')
+@router.patch('/ui', summary=f"{PLACEHOLDER_PREFIX}assistant_ui_api", description=f"{PLACEHOLDER_PREFIX}assistant_ui_api")
+@system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.APPLICATION, result_id_expr="id"))
 async def ui(session: SessionDep, data: str = Form(), files: List[UploadFile] = []):
     json_data = json.loads(data)
     uiSchema = AssistantUiSchema(**json_data)
@@ -119,8 +126,15 @@ async def ui(session: SessionDep, data: str = Form(), files: List[UploadFile] = 
             file_name, flag_name = SQLBotFileUtils.split_filename_and_flag(origin_file_name)
             file.filename = file_name
             if flag_name == 'logo' or flag_name == 'float_icon':
-                SQLBotFileUtils.check_file(file=file, file_types=[".jpg", ".jpeg", ".png", ".svg"],
-                                           limit_file_size=(10 * 1024 * 1024))
+                try:
+                    SQLBotFileUtils.check_file(file=file, file_types=[".jpg", ".png", ".svg"],
+                                               limit_file_size=(10 * 1024 * 1024))
+                except ValueError as e:
+                    error_msg = str(e)
+                    if '文件大小超过限制' in error_msg:
+                        raise ValueError(f"文件大小超过限制（最大 10 M）")
+                    else:
+                        raise e
                 if config_obj.get(flag_name):
                     SQLBotFileUtils.delete_file(config_obj.get(flag_name))
                 file_id = await SQLBotFileUtils.upload(file)
@@ -142,6 +156,7 @@ async def ui(session: SessionDep, data: str = Form(), files: List[UploadFile] = 
     session.add(db_model)
     session.commit()
     await clear_ui_cache(db_model.id)
+    return db_model
 
 
 @clear_cache(namespace=CacheNamespace.EMBEDDED_INFO, cacheName=CacheName.ASSISTANT_INFO, keyExpression="id")
@@ -149,27 +164,29 @@ async def clear_ui_cache(id: int):
     pass
 
 
-@router.get("", response_model=list[AssistantModel])
+@router.get("", response_model=list[AssistantModel], summary=f"{PLACEHOLDER_PREFIX}assistant_grid_api", description=f"{PLACEHOLDER_PREFIX}assistant_grid_api")
 async def query(session: SessionDep):
     list_result = session.exec(select(AssistantModel).where(AssistantModel.type != 4).order_by(AssistantModel.name,
                                                                                                AssistantModel.create_time)).all()
     return list_result
 
 
-@router.get("/advanced_application", response_model=list[AssistantModel])
+@router.get("/advanced_application", response_model=list[AssistantModel], include_in_schema=False)
 async def query_advanced_application(session: SessionDep):
     list_result = session.exec(select(AssistantModel).where(AssistantModel.type == 1).order_by(AssistantModel.name,
                                                                                                AssistantModel.create_time)).all()
     return list_result
 
 
-@router.post("")
+@router.post("", summary=f"{PLACEHOLDER_PREFIX}assistant_create_api", description=f"{PLACEHOLDER_PREFIX}assistant_create_api")
+@system_log(LogConfig(operation_type=OperationType.CREATE, module=OperationModules.APPLICATION, result_id_expr="id"))
 async def add(request: Request, session: SessionDep, creator: AssistantBase):
-    await save(request, session, creator)
+    return await save(request, session, creator)
 
 
-@router.put("")
+@router.put("", summary=f"{PLACEHOLDER_PREFIX}assistant_update_api", description=f"{PLACEHOLDER_PREFIX}assistant_update_api")
 @clear_cache(namespace=CacheNamespace.EMBEDDED_INFO, cacheName=CacheName.ASSISTANT_INFO, keyExpression="editor.id")
+@system_log(LogConfig(operation_type=OperationType.UPDATE, module=OperationModules.APPLICATION, resource_id_expr="editor.id"))
 async def update(request: Request, session: SessionDep, editor: AssistantDTO):
     id = editor.id
     db_model = session.get(AssistantModel, id)
@@ -182,8 +199,8 @@ async def update(request: Request, session: SessionDep, editor: AssistantDTO):
     dynamic_upgrade_cors(request=request, session=session)
 
 
-@router.get("/{id}", response_model=AssistantModel)
-async def get_one(session: SessionDep, id: int):
+@router.get("/{id}", response_model=AssistantModel, summary=f"{PLACEHOLDER_PREFIX}assistant_query_api", description=f"{PLACEHOLDER_PREFIX}assistant_query_api")
+async def get_one(session: SessionDep, id: int = Path(description="ID")):
     db_model = await get_assistant_info(session=session, assistant_id=id)
     if not db_model:
         raise ValueError(f"AssistantModel with id {id} not found")
@@ -191,9 +208,10 @@ async def get_one(session: SessionDep, id: int):
     return db_model
 
 
-@router.delete("/{id}")
+@router.delete("/{id}", summary=f"{PLACEHOLDER_PREFIX}assistant_del_api", description=f"{PLACEHOLDER_PREFIX}assistant_del_api")
 @clear_cache(namespace=CacheNamespace.EMBEDDED_INFO, cacheName=CacheName.ASSISTANT_INFO, keyExpression="id")
-async def delete(request: Request, session: SessionDep, id: int):
+@system_log(LogConfig(operation_type=OperationType.DELETE, module=OperationModules.APPLICATION, resource_id_expr="id"))
+async def delete(request: Request, session: SessionDep, id: int = Path(description="ID")):
     db_model = session.get(AssistantModel, id)
     if not db_model:
         raise ValueError(f"AssistantModel with id {id} not found")

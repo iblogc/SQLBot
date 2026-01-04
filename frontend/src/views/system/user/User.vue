@@ -8,7 +8,7 @@
           style="width: 240px; margin-right: 12px"
           :placeholder="$t('user.name_account_email')"
           clearable
-          @blur="handleSearch"
+          @keydown.enter.exact.prevent="handleSearch"
         >
           <template #prefix>
             <el-icon>
@@ -23,7 +23,7 @@
           </template>
           {{ $t('user.filter') }}
         </el-button>
-        <!-- <el-button secondary @click="handleUserImport">
+        <!--  <el-button secondary @click="handleUserImport">
           <template #icon>
             <ccmUpload></ccmUpload>
           </template>
@@ -76,7 +76,11 @@
         </el-table-column>
         <el-table-column prop="email" show-overflow-tooltip :label="$t('user.email')" />
         <!-- <el-table-column prop="phone" :label="$t('user.phone_number')" width="280" /> -->
-        <!-- <el-table-column prop="user_source" :label="$t('user.user_source')" width="280" /> -->
+        <el-table-column prop="origin" :label="$t('user.user_source')" width="120">
+          <template #default="scope">
+            <span>{{ formatUserOrigin(scope.row.origin) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column
           show-overflow-tooltip
           prop="oid_list"
@@ -233,6 +237,7 @@
     v-model="dialogFormVisible"
     :title="dialogTitle"
     destroy-on-close
+    modal-class="user-add-class"
     size="600px"
     :before-close="onFormClose"
   >
@@ -366,7 +371,7 @@
       </div>
     </template>
   </el-dialog>
-  <UserImport ref="userImportRef"></UserImport>
+  <UserImport ref="userImportRef" @refresh-grid="search"></UserImport>
   <drawer-main
     ref="drawerMainRef"
     :filter-options="filterOption"
@@ -425,13 +430,11 @@ const filterOption = ref<any[]>([
     type: 'enum',
     option: [
       { id: '0', name: t('user.local_creation') },
-      // { id: 1, name: 'LDAP' },
-      // { id: 2, name: 'OIDC' },
-      // { id: 3, name: 'CAS' },
-      // { id: 9, name: 'OAuth2' },
-      // { id: 4, name: t('user.feishu') },
-      // { id: 5, name: t('user.dingtalk') },
-      // { id: 6, name: t('user.wechat_for_business') },
+      { id: '1', name: 'CAS' },
+      { id: '2', name: 'OIDC' },
+      { id: '3', name: 'LDAP' },
+      { id: '4', name: 'OAuth2' },
+      /* { id: '5', name: 'SAML2' }, */
     ],
     field: 'origins',
     title: t('user.user_source'),
@@ -576,9 +579,9 @@ const handleEditPassword = (id: any) => {
   })
 }
 
-// const handleUserImport = () => {
-//   userImportRef.value.showDialog()
-// }
+/* const handleUserImport = () => {
+  userImportRef.value.showDialog()
+} */
 
 const handleConfirmPassword = () => {
   passwordRef.value.validate((val: any) => {
@@ -622,7 +625,10 @@ const handleToggleRowSelection = (check: boolean = true) => {
   isIndeterminate.value = !(i === 0 || i === state.tableData.length)
   selectionLoading.value = false
 }
-const handleSearch = () => {
+const handleSearch = ($event: any = {}) => {
+  if ($event?.isComposing) {
+    return
+  }
   state.pageInfo.currentPage = 1
   search()
 }
@@ -824,6 +830,13 @@ const loadDefaultPwd = () => {
     }
   })
 }
+const formatUserOrigin = (origin?: number) => {
+  if (!origin) {
+    return t('user.local_creation')
+  }
+  const originArray = ['CAS', 'OIDC', 'LDAP', 'OAuth2', 'SAML2']
+  return originArray[origin - 1]
+}
 onMounted(() => {
   workspaceList().then((res) => {
     options.value = res || []
@@ -1022,6 +1035,34 @@ onMounted(() => {
     margin-left: 33px;
     display: flex;
     align-items: center;
+  }
+}
+.user-add-class {
+  .down-template {
+    display: flex;
+    width: 100%;
+    height: 40px;
+    align-items: center;
+    line-height: 40px;
+    background: var(--ed-color-primary-80, #d2f1e9);
+    border-radius: 4px;
+    padding-left: 10px;
+    .icon-span {
+      color: var(--ed-color-primary);
+      font-size: 18px;
+      i {
+        top: 3px;
+      }
+    }
+    .down-template-content {
+      font-size: 14px;
+      display: flex;
+      flex-direction: row;
+      margin-left: 10px;
+      .down-button {
+        height: 40px;
+      }
+    }
   }
 }
 </style>

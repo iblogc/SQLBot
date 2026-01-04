@@ -4,11 +4,12 @@ import { useAppearanceStoreWithOut } from '@/stores/appearance'
 import { useUserStore } from '@/stores/user'
 import { request } from '@/utils/request'
 import type { Router } from 'vue-router'
+import { generateDynamicRouters } from './dynamic'
 
 const appearanceStore = useAppearanceStoreWithOut()
 const userStore = useUserStore()
 const { wsCache } = useCache()
-const whiteList = ['/login']
+const whiteList = ['/login', '/admin-login']
 const assistantWhiteList = ['/assistant', '/embeddedPage', '/401']
 export const watchRouter = (router: Router) => {
   router.beforeEach(async (to: any, from: any, next: any) => {
@@ -33,14 +34,21 @@ export const watchRouter = (router: Router) => {
       next('/login')
       return
     }
+    let isFirstDynamicPath = false
     if (!userStore.getUid) {
       await userStore.info()
+      generateDynamicRouters(router)
+      isFirstDynamicPath = to?.path === '/ds/index'
+      if (isFirstDynamicPath) {
+        next({ ...to, replace: true })
+        return
+      }
     }
     if (to.path === '/' || accessCrossPermission(to)) {
       next('/chat')
       return
     }
-    if (to.path === '/login') {
+    if (to.path === '/login' || to.path === '/admin-login') {
       console.info(from)
       next('/chat')
     } else {
