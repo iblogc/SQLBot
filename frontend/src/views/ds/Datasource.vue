@@ -17,8 +17,12 @@ import { dsTypeWithImg } from './js/ds-type'
 import { useI18n } from 'vue-i18n'
 import { useUserStore } from '@/stores/user'
 import { chatApi } from '@/api/chat'
+import RecommendedProblemConfigDialog from '@/views/ds/RecommendedProblemConfigDialog.vue'
+import { highlightKeyword } from '@/utils/xss'
 const userStore = useUserStore()
-interface Datasource {
+const recommendedProblemConfigRef = ref()
+
+export interface Datasource {
   name: string
   num: string
   type_name: string
@@ -26,6 +30,7 @@ interface Datasource {
   img: string
   description: string
   id?: string
+  recommended_config?: string
 }
 
 const router = useRouter()
@@ -67,14 +72,15 @@ const handleDefaultDatasourceChange = (item: any) => {
 }
 
 const formatKeywords = (item: string) => {
-  if (!defaultDatasourceKeywords.value) return item
-  return item.replaceAll(
-    defaultDatasourceKeywords.value,
-    `<span class="isSearch">${defaultDatasourceKeywords.value}</span>`
-  )
+  // Use XSS-safe highlight function
+  return highlightKeyword(item, defaultDatasourceKeywords.value, 'isSearch')
 }
 const handleEditDatasource = (res: any) => {
   addDrawerRef.value.handleEditDatasource(res)
+}
+
+const handleRecommendation = (res: Datasource) => {
+  recommendedProblemConfigRef.value?.init(res)
 }
 
 const handleQuestion = async (id: string) => {
@@ -151,7 +157,7 @@ const deleteHandler = (item: any) => {
       ''
     ),
   }).then(() => {
-    datasourceApi.delete(item.id).then(() => {
+    datasourceApi.delete(item.id, item.name).then(() => {
       ElMessage({
         type: 'success',
         message: t('dashboard.delete_success'),
@@ -192,6 +198,15 @@ const back = () => {
   currentDataTable.value = null
 }
 
+const loading = ref(false)
+
+function startLoading() {
+  loading.value = true
+}
+function endLoading() {
+  loading.value = false
+}
+
 useEmitt({
   name: 'ds-index-click',
   callback: back,
@@ -199,7 +214,7 @@ useEmitt({
 </script>
 
 <template>
-  <div v-show="!currentDataTable" class="datasource-config no-padding">
+  <div v-show="!currentDataTable" v-loading="loading" class="datasource-config no-padding">
     <div class="datasource-methods">
       <span class="title">{{ $t('ds.title') }}</span>
       <div class="button-input">
@@ -293,8 +308,11 @@ useEmitt({
             :type-name="ele.type_name"
             :num="ele.num"
             :description="ele.description"
+            @start-checking="startLoading"
+            @end-checking="endLoading"
             @question="handleQuestion"
             @edit="handleEditDatasource(ele)"
+            @recommendation="handleRecommendation(ele)"
             @del="deleteHandler(ele)"
             @data-table-detail="dataTableDetail(ele)"
           ></Card>
@@ -317,7 +335,10 @@ useEmitt({
         </el-button>
       </div>
     </template>
-
+    <RecommendedProblemConfigDialog
+      ref="recommendedProblemConfigRef"
+      @recommended-problem-change="search"
+    ></RecommendedProblemConfigDialog>
     <AddDrawer ref="addDrawerRef" @search="search"></AddDrawer>
   </div>
   <DataTable
@@ -393,7 +414,7 @@ useEmitt({
       padding-right: 8px;
       margin-bottom: 2px;
       position: relative;
-      border-radius: 4px;
+      border-radius: 6px;
       cursor: pointer;
       &:not(.empty):hover {
         background: #1f23291a;

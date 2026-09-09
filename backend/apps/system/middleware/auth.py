@@ -1,14 +1,17 @@
 
 import base64
 import json
+import re
 from typing import Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 import jwt
 from sqlmodel import Session
 from starlette.middleware.base import BaseHTTPMiddleware
-from apps.system.models.system_model import AssistantModel
-from common.core.db import engine 
+from apps.system.crud.apikey_manage import get_api_key
+from apps.system.models.system_model import ApiKeyModel, AssistantModel
+from common.core.db import engine
 from apps.system.crud.assistant import get_assistant_info, get_assistant_user
 from apps.system.crud.user import get_user_by_account, get_user_info
 from apps.system.schemas.system_schema import AssistantHeader, UserInfoDTO
@@ -16,7 +19,7 @@ from common.core import security
 from common.core.config import settings
 from common.core.schemas import TokenPayload
 from common.utils.locale import I18n
-from common.utils.utils import SQLBotLogUtil
+from common.utils.utils import SQLBotLogUtil, get_origin_from_referer, origin_match_domain
 from common.utils.whitelist import whiteUtils
 from fastapi.security.utils import get_authorization_scheme_param
 from common.core.deps import get_i18n
@@ -28,18 +31,55 @@ class TokenMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request, call_next):
-        
-        if self.is_options(request) or whiteUtils.is_whitelisted(request.url.path):
+        # 使用 scope["path"]（请求行真实路径）做白名单判断：
+        # request.url.path 会拼接未校验的 Host 头（Starlette URL(scope) 行为），
+        # 攻击者可通过伪造 Host: x/api/v1/mcp 将受保护接口伪装成白名单路径绕过认证
+        request_path = request.scope.get("path") or request.url.path
+
+        if self.is_options(request) or whiteUtils.is_whitelisted(request_path):
+            # 动态处理 /system/assistant/info/{id} 的 CORS 预检
+            if request.method == "OPTIONS":
+                origin = request.headers.get("origin", "")
+                if origin:
+                    match = re.search(r'/system/assistant/info/(\d+)', request_path)
+                    if match:
+                        assistant_id = int(match.group(1))
+                        with Session(engine) as session:
+                            db_model = session.get(AssistantModel, assistant_id)
+                            if db_model and origin_match_domain(origin, db_model.domain):
+                                return Response(
+                                    status_code=200,
+                                    headers={
+                                        "Access-Control-Allow-Origin": origin,
+                                        "Access-Control-Allow-Methods": "GET, OPTIONS",
+                                        "Access-Control-Allow-Headers": "*",
+                                        "Access-Control-Allow-Credentials": "true",
+                                        "Access-Control-Max-Age": "600",
+                                    },
+                                )
             return await call_next(request)
         assistantTokenKey = settings.ASSISTANT_TOKEN_KEY
         assistantToken = request.headers.get(assistantTokenKey)
+        askToken = request.headers.get("X-SQLBOT-ASK-TOKEN")
         trans = await get_i18n(request)
+        if askToken:
+            validate_pass, data = await self.validateAskToken(askToken, trans)
+            if validate_pass:
+                request.state.current_user = data
+                return await call_next(request)
+            message = trans('i18n_permission.authenticate_invalid', msg = data)
+            return JSONResponse(message, status_code=401, headers={"Access-Control-Allow-Origin": "*"})
         #if assistantToken and assistantToken.lower().startswith("assistant "):
         if assistantToken:
             validator: tuple[any] = await self.validateAssistant(assistantToken, trans)
             if validator[0]:
                 request.state.current_user = validator[1]
+                if request.state.current_user and trans.lang:
+                    request.state.current_user.language = trans.lang
                 request.state.assistant = validator[2]
+                origin = request.headers.get("X-SQLBOT-HOST-ORIGIN") or get_origin_from_referer(request)
+                if origin and validator[2]:
+                    request.state.assistant.request_origin = origin
                 return await call_next(request)
             message = trans('i18n_permission.authenticate_invalid', msg = validator[1])
             return JSONResponse(message, status_code=401, headers={"Access-Control-Allow-Origin": "*"})
@@ -56,6 +96,50 @@ class TokenMiddleware(BaseHTTPMiddleware):
     
     def is_options(self, request: Request):
         return request.method == "OPTIONS"
+    
+    async def validateAskToken(self, askToken: Optional[str], trans: I18n):
+        if not askToken:
+            return False, f"Miss Token[X-SQLBOT-ASK-TOKEN]!"
+        schema, param = get_authorization_scheme_param(askToken)
+        if schema.lower() != "sk":
+            return False, f"Token schema error!"
+        try: 
+            payload = jwt.decode(
+                param, options={"verify_signature": False, "verify_exp": False}, algorithms=[security.ALGORITHM]
+            )
+            access_key = payload.get('access_key', None)
+            
+            if not access_key:
+                return False, f"Miss access_key payload error!"
+            with Session(engine) as session:
+                api_key_model = await get_api_key(session, access_key)
+                api_key_model = ApiKeyModel.model_validate(api_key_model) if api_key_model else None
+                if not api_key_model:
+                    return False, f"Invalid access_key!"
+                if not api_key_model.status:
+                    return False, f"Disabled access_key!"
+                payload = jwt.decode(
+                    param, api_key_model.secret_key, algorithms=[security.ALGORITHM]
+                )
+                uid = api_key_model.uid
+                session_user = await get_user_info(session = session, user_id = uid)
+                if not session_user:
+                    message = trans('i18n_not_exist', msg = trans('i18n_user.account'))
+                    raise Exception(message)
+                session_user = UserInfoDTO.model_validate(session_user)
+                if session_user.status != 1:
+                    message = trans('i18n_login.user_disable', msg = trans('i18n_concat_admin'))
+                    raise Exception(message)
+                if not session_user.oid or session_user.oid == 0:
+                    message = trans('i18n_login.no_associated_ws', msg = trans('i18n_concat_admin'))
+                    raise Exception(message)
+                return True, session_user
+        except Exception as e:
+            msg = str(e)
+            SQLBotLogUtil.exception(f"Token validation error: {msg}")
+            if 'expired' in msg:
+                return False, jwt.ExpiredSignatureError(trans('i18n_permission.token_expired')) 
+            return False, e
     
     async def validateToken(self, token: Optional[str], trans: I18n):
         if not token:
@@ -113,15 +197,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
                 assistant_info = await get_assistant_info(session=session, assistant_id=payload['assistant_id'])
                 assistant_info = AssistantModel.model_validate(assistant_info)
                 assistant_info = AssistantHeader.model_validate(assistant_info.model_dump(exclude_unset=True))
-                if assistant_info and assistant_info.type == 0:
-                    if payload['oid']:
-                        session_user.oid = int(payload['oid'])
-                    else:
-                        assistant_oid = 1
-                        configuration = assistant_info.configuration
-                        config_obj = json.loads(configuration) if configuration else {}
-                        assistant_oid = config_obj.get('oid', 1)
-                        session_user.oid = int(assistant_oid)
+                session_user.oid = int(assistant_info.oid)
                         
                 return True, session_user, assistant_info
         except Exception as e:
@@ -131,9 +207,9 @@ class TokenMiddleware(BaseHTTPMiddleware):
     
     async def validateEmbedded(self, param: str, trans: I18n) -> tuple[any]:
         try: 
-            """ payload = jwt.decode(
-                param, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
-            ) """
+            # WARNING: Signature verification is disabled for embedded tokens
+            # This is a security risk and should only be used if absolutely necessary
+            # Consider implementing proper signature verification with a shared secret
             payload: dict = jwt.decode(
                 param,
                 options={"verify_signature": False, "verify_exp": False},
@@ -147,6 +223,15 @@ class TokenMiddleware(BaseHTTPMiddleware):
                 return False, f"Miss account payload error!"
             account = payload['account']
             with Session(engine) as session:
+                assistant_info = await get_assistant_info(session=session, assistant_id=embeddedId)
+                assistant_info = AssistantModel.model_validate(assistant_info)
+                # embedded 协议（app_secret + account）仅适用于页面嵌入（type=4）应用
+                if assistant_info.type != 4:
+                    return False, f"Invalid embedded app type!"
+                payload = jwt.decode(
+                    param, assistant_info.app_secret, algorithms=[security.ALGORITHM]
+                )
+                assistant_info = AssistantHeader.model_validate(assistant_info.model_dump(exclude_unset=True))
                 """ session_user = await get_user_info(session = session, user_id = token_data.id)
                 session_user = UserInfoDTO.model_validate(session_user) """
                 session_user = get_user_by_account(session = session, account=account)
@@ -154,7 +239,7 @@ class TokenMiddleware(BaseHTTPMiddleware):
                     message = trans('i18n_not_exist', msg = trans('i18n_user.account'))
                     raise Exception(message)
                 session_user = await get_user_info(session = session, user_id = session_user.id)
-                
+
                 session_user = UserInfoDTO.model_validate(session_user)
                 if session_user.status != 1:
                     message = trans('i18n_login.user_disable', msg = trans('i18n_concat_admin'))
@@ -162,9 +247,12 @@ class TokenMiddleware(BaseHTTPMiddleware):
                 if not session_user.oid or session_user.oid == 0:
                     message = trans('i18n_login.no_associated_ws', msg = trans('i18n_concat_admin'))
                     raise Exception(message)
-                assistant_info = await get_assistant_info(session=session, assistant_id=embeddedId)
-                assistant_info = AssistantModel.model_validate(assistant_info)
-                assistant_info = AssistantHeader.model_validate(assistant_info.model_dump(exclude_unset=True))
+                # 管理员账号不允许通过 embedded token 使用：app_secret 由集成方持有，
+                # 攻击者若取得任意应用 app_secret 即可伪造 account=admin 的管理员身份
+                if session_user.isAdmin:
+                    return False, f"Admin account is not allowed for embedded token!"
+                if session_user.oid:
+                    assistant_info.oid = int(session_user.oid)
                 return True, session_user, assistant_info
         except Exception as e:
             SQLBotLogUtil.exception(f"Embedded validation error: {str(e)}")

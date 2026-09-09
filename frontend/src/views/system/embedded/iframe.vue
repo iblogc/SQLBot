@@ -14,12 +14,15 @@ import icon_copy_outlined from '@/assets/embedded/icon_copy_outlined.svg'
 import { useClipboard } from '@vueuse/core'
 import SetUi from './SetUi.vue'
 import Card from './Card.vue'
-import { workspaceList } from '@/api/workspace'
+// import { workspaceList } from '@/api/workspace'
 import DsCard from './DsCard.vue'
 import { getList, updateAssistant, saveAssistant, delOne, dsApi } from '@/api/embedded'
 import { useI18n } from 'vue-i18n'
 import { cloneDeep } from 'lodash-es'
+import { useUserStore } from '@/stores/user.ts'
+import { modelApi } from '@/api/system.ts'
 
+const userStore = useUserStore()
 defineProps({
   btnSelect: {
     type: String,
@@ -27,7 +30,7 @@ defineProps({
   },
 })
 
-const emits = defineEmits(['btnSelectChange'])
+// const emits = defineEmits(['btnSelectChange'])
 
 const { t } = useI18n()
 const { copy } = useClipboard({ legacy: true })
@@ -49,7 +52,6 @@ const activeMode = ref('full')
 const embeddedList = ref<any[]>([])
 const systemCredentials = ['localStorage', 'custom', 'cookie', 'sessionStorage']
 const credentials = ['header', 'cookie', 'param']
-const workspaces = ref<any[]>([])
 
 const defaultEmbedded = {
   id: '',
@@ -58,6 +60,8 @@ const defaultEmbedded = {
   description: '',
   configuration: '',
   domain: '',
+  enable_custom_model: false,
+  custom_model: '',
 }
 const currentEmbedded = reactive<any>(cloneDeep(defaultEmbedded))
 
@@ -66,6 +70,7 @@ const defaultForm = {
   oid: 1,
   public_list: [],
   private_list: [],
+  auto_ds: false,
 }
 
 const dsForm = reactive<{ [key: string]: any }>(cloneDeep(defaultForm))
@@ -82,10 +87,12 @@ const certificateForm = reactive(cloneDeep(defaultCertificateForm))
 
 const defaultUrlForm = {
   endpoint: '',
+  timeout: 10,
   encrypt: false,
   aes_key: '',
   aes_iv: '',
   certificate: [] as any,
+  auto_ds: false,
 }
 const urlForm = reactive(cloneDeep(defaultUrlForm))
 
@@ -97,6 +104,27 @@ const embeddedListWithSearch = computed(() => {
     ele.name.toLowerCase().includes(keywords.value.toLowerCase())
   )
 })
+
+interface Model {
+  id: number
+  name: string
+  default_model: boolean
+  supplier: number
+}
+
+const modelList = ref<Array<Model>>([])
+
+const searchModels = () => {
+  searchLoading.value = true
+  modelApi
+    .list_by_ws()
+    .then((res: any) => {
+      modelList.value = res
+    })
+    .finally(() => {
+      searchLoading.value = false
+    })
+}
 
 const userTypeList = [
   {
@@ -112,11 +140,7 @@ const userTypeList = [
     value: 1,
   },
 ]
-const initWorkspace = () => {
-  workspaceList().then((res) => {
-    workspaces.value = res
-  })
-}
+
 const handleAddEmbedded = (val: any) => {
   Object.assign(currentEmbedded, cloneDeep(defaultEmbedded))
   Object.keys(dsForm).forEach((ele) => {
@@ -132,11 +156,7 @@ const handleAddEmbedded = (val: any) => {
     handleAdvancedEmbedded(null)
   }
 }
-const wsChanged = (val: any) => {
-  dsForm.public_list = []
-  dsForm.oid = val
-  getDsList()
-}
+
 const getDsList = () => {
   dsApi(dsForm.oid).then((res: any) => {
     dsListOptions.value = res || []
@@ -144,12 +164,16 @@ const getDsList = () => {
 }
 const handleBaseEmbedded = (row: any) => {
   advancedApplication.value = false
-  initWorkspace()
   if (row) {
     Object.assign(dsForm, JSON.parse(row.configuration))
+  } else {
+    Object.assign(dsForm, { oid: userStore.getOid })
   }
   getDsList()
   ruleConfigvVisible.value = true
+
+  searchModels()
+
   dialogTitle.value = row?.id
     ? t('embedded.edit_basic_applications')
     : t('embedded.create_basic_application')
@@ -157,9 +181,21 @@ const handleBaseEmbedded = (row: any) => {
 const handleAdvancedEmbedded = (row: any) => {
   advancedApplication.value = true
   if (row) {
-    Object.assign(urlForm, cloneDeep(JSON.parse(row.configuration)))
+    const tempData = cloneDeep(JSON.parse(row.configuration))
+    if (tempData?.endpoint.startsWith('http')) {
+      row.domain
+        .trim()
+        .split(',')
+        .forEach((domain: string) => {
+          tempData.endpoint = tempData.endpoint.replace(domain, '')
+        })
+    }
+    Object.assign(urlForm, tempData)
   }
   ruleConfigvVisible.value = true
+
+  searchModels()
+
   dialogTitle.value = row?.id
     ? t('embedded.edit_advanced_applications')
     : t('embedded.creating_advanced_applications')
@@ -256,6 +292,15 @@ const setUiRef = ref()
 const handleSetUi = (row: any) => {
   setUiRef.value.open(row)
 }
+const splitString = (str: string) => {
+  if (typeof str !== 'string') {
+    return []
+  }
+  return str
+    .split(/[,;]/)
+    .map((item) => item.trim())
+    .filter((item) => item !== '')
+}
 const validateUrl = (_: any, value: any, callback: any) => {
   if (value === '') {
     callback(
@@ -265,13 +310,15 @@ const validateUrl = (_: any, value: any, callback: any) => {
     )
   } else {
     // var Expression = /(https?:\/\/)?([\da-z\.-]+)\.([a-z]{2,6})(:\d{1,5})?([\/\w\.-]*)*\/?(#[\S]+)?/ // eslint-disable-line
-    var Expression = /^https?:\/\/[^\s/?#]+(:\d+)?/i
-    var objExp = new RegExp(Expression)
-    if (objExp.test(value) && !value.endsWith('/')) {
-      callback()
-    } else {
-      callback(t('embedded.format_is_incorrect'))
-    }
+    splitString(value).forEach((tempVal: string) => {
+      var Expression = /^https?:\/\/[^\s/?#]+(:\d+)?/i
+      var objExp = new RegExp(Expression)
+      if (objExp.test(tempVal) && !tempVal.endsWith('/')) {
+        callback()
+      } else {
+        callback(t('embedded.format_is_incorrect', { msg: t('embedded.domain_format_incorrect') }))
+      }
+    })
   }
 }
 const rules = {
@@ -287,6 +334,18 @@ const rules = {
       required: true,
       validator: validateUrl,
       trigger: 'blur',
+    },
+  ],
+  custom_model: [
+    {
+      validator: (_: any, value: any, callback: any) => {
+        if (currentEmbedded.enable_custom_model && !value) {
+          callback(new Error(t('datasource.please_enter') + t('common.empty') + t('modelType.llm')))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'change',
     },
   ],
 }
@@ -307,12 +366,14 @@ const validatePass = (_: any, value: any, callback: any) => {
     )
   } else {
     // var Expression = /(https?:\/\/)?([\da-z\.-]+)\.([a-z]{2,6})(:\d{1,5})?([\/\w\.-]*)*\/?(#[\S]+)?/ // eslint-disable-line
-    var Expression = /^https?:\/\/[^\s/?#]+(:\d+)?/i
+    // var Expression = /^https?:\/\/[^\s/?#]+(:\d+)?/i
+    const absoluteUrlRegex = /^https?:\/\/[^\s/?#]+(:\d+)?(\/[^\s?#]*)?(\?[^\s#]*)?(#\S*)?$/i
+    var Expression = /^\/([a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+(\?[a-zA-Z0-9_=&-]+)?$/
     var objExp = new RegExp(Expression)
-    if (objExp.test(value) && value.startsWith(currentEmbedded.domain)) {
+    if (objExp.test(value) || absoluteUrlRegex.test(value)) {
       callback()
     } else {
-      callback(t('embedded.format_is_incorrect'))
+      callback(t('embedded.format_is_incorrect', { msg: t('embedded.interface_url_incorrect') }))
     }
   }
 }
@@ -325,12 +386,27 @@ const validateCertificate = (_: any, value: any, callback: any) => {
   }
 }
 
+const validateTimeout = (_: any, value: any, callback: any) => {
+  if (value === null) {
+    callback(new Error(t('datasource.please_enter') + t('common.empty') + t('ds.form.timeout')))
+  } else {
+    callback()
+  }
+}
+
 const urlRules = {
   endpoint: [
     {
       required: true,
       validator: validatePass,
       trigger: 'blur',
+    },
+  ],
+  timeout: [
+    {
+      required: true,
+      validator: validateTimeout,
+      trigger: 'change',
     },
   ],
   certificate: [
@@ -403,6 +479,9 @@ const saveEmbedded = () => {
 
       if (!currentEmbedded.id) {
         delete obj.id
+      }
+      if (obj.custom_model == undefined) {
+        obj.custom_model = ''
       }
       req(obj).then(() => {
         ElMessage({
@@ -536,7 +615,8 @@ const saveHandler = () => {
 <template>
   <div v-loading="searchLoading" class="embedded-index no-padding">
     <div class="tool-left">
-      <div class="btn-select">
+      <span class="page-title">{{ t('embedded.assistant_app') }}</span>
+      <!-- <div class="btn-select">
         <el-button
           :class="[btnSelect === 'd' && 'is-active']"
           text
@@ -551,7 +631,7 @@ const saveHandler = () => {
         >
           {{ t('embedded.embedded_page') }}
         </el-button>
-      </div>
+      </div> -->
       <div>
         <el-input
           v-model="keywords"
@@ -678,7 +758,7 @@ const saveHandler = () => {
         <div v-if="editRule !== 2" class="flex-center" style="width: 100%">
           <el-steps custom style="max-width: 500px; flex: 1" :active="activeStep" align-center>
             <el-step>
-              <template #title> {{ $t('embedded.basic_information') }} </template>
+              <template #title> {{ $t('embedded.basic_information') }}</template>
             </el-step>
             <el-step>
               <template #title>
@@ -742,10 +822,35 @@ const saveHandler = () => {
               <el-form-item prop="domain" :label="t('embedded.cross_domain_settings')">
                 <el-input
                   v-model="currentEmbedded.domain"
+                  type="textarea"
+                  :autosize="{ minRows: 2 }"
                   clearable
                   :placeholder="$t('embedded.third_party_address')"
                   autocomplete="off"
                 />
+              </el-form-item>
+
+              <el-form-item prop="enable_custom_model" :label="t('embedded.useModel')">
+                <el-radio-group v-model="currentEmbedded.enable_custom_model">
+                  <el-radio :value="false">{{ t('embedded.defaultModel') }}</el-radio>
+                  <el-radio :value="true">{{ t('embedded.customModel') }}</el-radio>
+                </el-radio-group>
+              </el-form-item>
+
+              <el-form-item
+                v-if="currentEmbedded.enable_custom_model"
+                prop="custom_model"
+                :label="t('modelType.llm')"
+                required
+              >
+                <el-select v-model="currentEmbedded.custom_model" clearable filterable>
+                  <el-option
+                    v-for="item in modelList"
+                    :key="item.id"
+                    :label="item.name"
+                    :value="item.id"
+                  />
+                </el-select>
               </el-form-item>
             </el-form>
           </div>
@@ -779,6 +884,15 @@ const saveHandler = () => {
                   autocomplete="off"
                 />
               </el-form-item>
+              <el-form-item :label="t('ds.form.timeout')" prop="timeout">
+                <el-input-number
+                  v-model="urlForm.timeout"
+                  clearable
+                  :min="0"
+                  :max="300"
+                  controls-position="right"
+                />
+              </el-form-item>
               <el-form-item prop="AES" class="custom-require">
                 <template #label>
                   <span class="custom-require_danger">{{ t('embedded.aes_enable') }}</span>
@@ -803,20 +917,7 @@ const saveHandler = () => {
                   autocomplete="off"
                 />
               </el-form-item>
-              <!-- <el-form-item v-if="urlForm.encrypt" prop="aes_iv" label="AES IV">
-            <el-input
-              v-model="urlForm.aes_iv"
-              clearable
-              :placeholder="
-                $t('datasource.please_enter') +
-                $t('common.empty') +
-                ' 16 ' +
-                $t('embedded.bit') +
-                ' AES IV'
-              "
-              autocomplete="off"
-            />
-          </el-form-item> -->
+
               <el-form-item class="certificate-table_form" prop="certificate">
                 <template #label>
                   <div class="title-content">
@@ -879,6 +980,10 @@ const saveHandler = () => {
                   </el-table>
                 </div>
               </el-form-item>
+
+              <!-- <el-form-item prop="auto_ds" :label="t('embedded.auto_select_ds')">
+                <el-switch v-model="urlForm.auto_ds" />
+              </el-form-item> -->
             </el-form>
           </div>
         </el-scrollbar>
@@ -899,7 +1004,7 @@ const saveHandler = () => {
               class="form-content_error"
               @submit.prevent
             >
-              <el-form-item prop="oid" :label="t('user.workspace')">
+              <!-- <el-form-item prop="oid" :label="t('user.workspace')">
                 <el-select
                   v-model="dsForm.oid"
                   filterable
@@ -915,7 +1020,7 @@ const saveHandler = () => {
                     :value="item.id"
                   />
                 </el-select>
-              </el-form-item>
+              </el-form-item> -->
 
               <el-form-item class="private-list_form">
                 <template #label>
@@ -944,13 +1049,17 @@ const saveHandler = () => {
                   ></DsCard>
                 </div>
               </el-form-item>
+
+              <!-- <el-form-item prop="auto_ds" :label="t('embedded.auto_select_ds')">
+                <el-switch v-model="dsForm.auto_ds" />
+              </el-form-item> -->
             </el-form>
           </div>
         </el-scrollbar>
       </div>
 
       <template #footer>
-        <el-button secondary @click="beforeClose"> {{ $t('common.cancel') }} </el-button>
+        <el-button secondary @click="beforeClose"> {{ $t('common.cancel') }}</el-button>
         <el-button v-if="activeStep === 1 && editRule !== 2" secondary @click="preview">
           {{ t('ds.previous') }}
         </el-button>
@@ -1136,12 +1245,19 @@ const saveHandler = () => {
     padding-bottom: 0;
     height: auto;
   }
+
   .tool-left {
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 16px;
     padding: 0 24px 0 24px;
+
+    .page-title {
+      font-weight: 500;
+      font-size: 20px;
+      line-height: 28px;
+    }
 
     .title {
       font-weight: 500;
@@ -1166,12 +1282,14 @@ const saveHandler = () => {
       .ed-button:not(.is-active) {
         color: #1f2329;
       }
+
       .ed-button.is-text {
         height: 24px;
         width: auto;
         padding: 0 8px;
         line-height: 24px;
       }
+
       .ed-button + .ed-button {
         margin-left: 4px;
       }
@@ -1200,6 +1318,7 @@ const saveHandler = () => {
     padding-left: 0;
     padding-right: 0;
   }
+
   .title {
     font-weight: 500;
     font-size: 16px;
@@ -1217,6 +1336,7 @@ const saveHandler = () => {
   .private-list {
     display: flex;
     align-items: center;
+
     .open-the_query {
       color: #ff8800;
       margin-left: 4px;
@@ -1232,6 +1352,7 @@ const saveHandler = () => {
 
     .card {
       width: 392px;
+
       &:nth-child(even) {
         margin-right: 0;
       }
@@ -1246,6 +1367,7 @@ const saveHandler = () => {
     width: 100%;
     height: 100%;
     padding-bottom: 24px;
+
     & > .ed-scrollbar {
       .scroll-content {
         width: 800px;
@@ -1257,6 +1379,7 @@ const saveHandler = () => {
       &:last-child {
         margin-bottom: 0;
       }
+
       .aes-encrypt-tips {
         font-weight: 400;
         font-size: 14px;
@@ -1322,9 +1445,11 @@ const saveHandler = () => {
         color: #646a73;
         height: 24px;
       }
+
       .ed-button:not(.is-disabled):hover {
         background: #1f23291a;
       }
+
       .ed-button + .ed-button {
         margin-left: 8px;
       }
@@ -1351,15 +1476,17 @@ const saveHandler = () => {
       padding: 4px;
       position: relative;
     }
+
     .popover-item {
       min-height: 98px;
       display: flex;
       padding-left: 8px;
       padding-right: 8px;
       position: relative;
-      border-radius: 4px;
+      border-radius: 6px;
       cursor: pointer;
       padding-top: 8px;
+
       &:hover {
         background: #1f23291a;
       }
@@ -1391,6 +1518,7 @@ const saveHandler = () => {
 .embed-third_party {
   .floating-window {
     width: 552px;
+
     .mode {
       display: flex;
       align-items: center;
@@ -1415,6 +1543,9 @@ const saveHandler = () => {
       display: flex;
       align-items: center;
       flex-direction: column;
+      &:hover {
+        box-shadow: 0px 6px 24px 0px #1f232914;
+      }
 
       .title {
         font-weight: 500;
@@ -1428,6 +1559,7 @@ const saveHandler = () => {
         border-color: var(--ed-color-primary, #1cba90);
       }
     }
+
     .line {
       background-color: #1f232926;
       width: calc(100% - 32px);
@@ -1437,6 +1569,7 @@ const saveHandler = () => {
 
     .code {
       padding: 16px;
+
       .copy {
         display: flex;
         align-items: center;
@@ -1448,6 +1581,7 @@ const saveHandler = () => {
         .ed-icon {
           cursor: pointer;
           position: relative;
+
           &:hover {
             &::after {
               content: '';

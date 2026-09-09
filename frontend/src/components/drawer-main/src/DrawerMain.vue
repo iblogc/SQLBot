@@ -6,6 +6,8 @@ import DrawerFilter from '@/components/drawer-filter/src/DrawerFilter.vue'
 import DrawerEnumFilter from '@/components/drawer-filter/src/DrawerEnumFilter.vue'
 import { useEmitt } from '@/utils/useEmitt'
 import { useI18n } from 'vue-i18n'
+import DrawerTreeFilter from '@/components/drawer-filter/src/DrawerTreeFilter.vue'
+import DrawerTimeFilter from '@/components/drawer-filter/src/DrawerTimeFilter.vue'
 const { t } = useI18n()
 const props = defineProps({
   filterOptions: propTypes.arrayOf(
@@ -14,6 +16,7 @@ const props = defineProps({
       field: propTypes.string,
       option: propTypes.array,
       title: propTypes.string,
+      single: propTypes.bool,
       property: propTypes.shape({}),
     })
   ),
@@ -126,12 +129,21 @@ defineExpose({
     direction="rtl"
   >
     <div v-for="(component, index) in componentList" :key="index">
+      <drawer-tree-filter
+        v-if="component.type === 'tree-select'"
+        :option-list="component.option"
+        :title="component.title"
+        :property="component.property"
+        :index="index"
+        @filter-change="(v) => filterChange(v, component.field, 'in')"
+      />
       <drawer-filter
         v-if="component.type === 'select'"
         :option-list="component.option"
         :title="component.title"
         :index="index"
         :property="component.property"
+        :single="!!component.single"
         @filter-change="(v) => filterChange(v, component.field, 'in')"
       />
       <drawer-enum-filter
@@ -140,6 +152,13 @@ defineExpose({
         :title="component.title"
         :index="index"
         @filter-change="(v) => filterChange(v, component.field, 'in')"
+      />
+      <drawer-time-filter
+        v-if="component.type === 'time'"
+        :title="component.title"
+        :property="component.property"
+        :index="index"
+        @filter-change="(v) => filterChange(v, component.field, component.operator)"
       />
     </div>
 

@@ -7,9 +7,13 @@
     element-loading-background="#F5F6F7"
   ></div>
 
-  <div class="login-container" :class="{ 'hide-login-container': showLoading }">
-    <div class="login-left">
-      <img :src="bg" alt="" />
+  <div
+    ref="loginContainer"
+    class="login-container"
+    :class="{ 'hide-login-container': showLoading }"
+  >
+    <div v-if="showLoginImage" class="login-image-content">
+      <el-image class="login-image" fit="cover" :src="bg" />
     </div>
     <div class="login-content">
       <div class="login-right">
@@ -24,46 +28,54 @@
           }}</span>
         </div>
         <div v-if="appearanceStore.getShowSlogan" class="welcome">
-          {{ appearanceStore.slogan || $t('common.intelligent_questioning_platform') }}
+          {{ appearanceStore.slogan ?? $t('common.intelligent_questioning_platform') }}
         </div>
         <div v-else class="welcome" style="height: 0"></div>
         <div class="login-form">
-          <h2 class="title">{{ $t('common.login') }}</h2>
-          <el-form
-            ref="loginFormRef"
-            class="form-content_error"
-            :model="loginForm"
-            :rules="rules"
-            @keyup.enter="submitForm"
-          >
-            <el-form-item prop="username">
-              <el-input
-                v-model="loginForm.username"
-                clearable
-                :placeholder="$t('common.your_account_email_address')"
-                size="large"
-              ></el-input>
-            </el-form-item>
-            <el-form-item prop="password">
-              <el-input
-                v-model="loginForm.password"
-                :placeholder="$t('common.enter_your_password')"
-                type="password"
-                show-password
-                clearable
-                size="large"
-              ></el-input>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" class="login-btn" @click="submitForm">{{
-                $t('common.login_')
-              }}</el-button>
-            </el-form-item>
-          </el-form>
+          <div class="default-login-tabs">
+            <h2 class="title">{{ $t('common.login') }}</h2>
+            <el-form
+              ref="loginFormRef"
+              class="form-content_error"
+              :model="loginForm"
+              :rules="rules"
+              @keyup.enter="submitForm"
+            >
+              <el-form-item prop="username">
+                <el-input
+                  v-model="loginForm.username"
+                  clearable
+                  :placeholder="$t('login.input_account')"
+                  size="large"
+                ></el-input>
+              </el-form-item>
+              <el-form-item prop="password">
+                <el-input
+                  v-model="loginForm.password"
+                  :placeholder="$t('common.enter_your_password')"
+                  type="password"
+                  show-password
+                  clearable
+                  size="large"
+                ></el-input>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" class="login-btn" @click="submitForm">{{
+                  $t('common.login_')
+                }}</el-button>
+              </el-form-item>
+            </el-form>
+          </div>
           <Handler
-            ref="xpackLoginHandler"
             v-model:loading="showLoading"
             jsname="L2NvbXBvbmVudC9sb2dpbi9IYW5kbGVy"
+            @switch-tab="switchTab"
+          />
+          <InitialPwdDialog
+            v-model="initPwdDialogVisible"
+            :account="loginForm.username"
+            :old-pwd="loginForm.password"
+            @pwd-saved="onInitPwdSaved"
           />
         </div>
       </div>
@@ -72,7 +84,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useI18n } from 'vue-i18n'
@@ -82,18 +94,22 @@ import login_image from '@/assets/embedded/login_image.png'
 import { useAppearanceStoreWithOut } from '@/stores/appearance'
 import loginImage from '@/assets/blue/login-image_blue.png'
 import Handler from './xpack/Handler.vue'
+import InitialPwdDialog from './InitialPwdDialog.vue'
+import { toLoginSuccess } from '@/utils/utils'
+import elementResizeDetectorMaker from 'element-resize-detector'
 
 const showLoading = ref(true)
 const router = useRouter()
 const userStore = useUserStore()
 const appearanceStore = useAppearanceStoreWithOut()
 const { t } = useI18n()
-const xpackLoginHandler = ref<any>(null)
 const loginForm = ref({
   username: '',
   password: '',
 })
+const activeName = ref('simple')
 
+// const isLdap = computed(() => activeName.value == 'ldap')
 const bg = computed(() => {
   return appearanceStore.getBg || (appearanceStore.isBlue ? loginImage : login_image)
 })
@@ -101,7 +117,20 @@ const bg = computed(() => {
 const loginBg = computed(() => {
   return appearanceStore.getLogin
 })
+const loginContainerWidth = ref(0)
+const loginContainer = ref()
+const showLoginImage = computed<boolean>(() => {
+  return !(loginContainerWidth.value < 889)
+})
 
+onMounted(async () => {
+  const erd = elementResizeDetectorMaker()
+  erd.listenTo(loginContainer.value, () => {
+    nextTick(() => {
+      loginContainerWidth.value = loginContainer.value?.offsetWidth
+    })
+  })
+})
 const rules = {
   username: [{ required: true, message: t('common.your_account_email_address'), trigger: 'blur' }],
   password: [{ required: true, message: t('common.the_correct_password'), trigger: 'blur' }],
@@ -112,11 +141,22 @@ const loginFormRef = ref()
 const submitForm = () => {
   loginFormRef.value.validate((valid: boolean) => {
     if (valid) {
-      userStore.login(loginForm.value).then(() => {
-        router.push('/chat')
+      userStore.login(loginForm.value).then((res: any) => {
+        if (res?.need_change_pwd) {
+          initPwdDialogVisible.value = true
+          return
+        }
+        toLoginSuccess(router)
       })
     }
   })
+}
+const initPwdDialogVisible = ref(false)
+const onInitPwdSaved = (newPwd: string) => {
+  loginForm.value.password = newPwd
+}
+const switchTab = (name: string) => {
+  activeName.value = name || 'simple'
 }
 </script>
 
@@ -129,17 +169,20 @@ const submitForm = () => {
   align-items: center;
   justify-content: center;
 
-  .login-left {
-    display: flex;
+  .login-image-content {
+    overflow: hidden;
     height: 100%;
     width: 40%;
-    img {
+    min-width: 400px;
+    .login-image {
+      background-size: 100% 100%;
+      width: 100%;
       height: 100%;
-      max-width: 100%;
     }
   }
 
   .login-content {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -193,9 +236,9 @@ const submitForm = () => {
 
         .login-btn {
           width: 100%;
-          height: 45px;
+          height: 40px;
           font-size: 16px;
-          border-radius: 4px;
+          border-radius: 6px;
         }
 
         .agreement {
@@ -210,9 +253,7 @@ const submitForm = () => {
 .hide-login-container {
   display: none;
 }
-:deep(.ed-input__wrapper) {
-  background-color: #f5f7fa;
-}
+
 .xpack-login-handler-mask {
   position: fixed;
   width: 100vw;

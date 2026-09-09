@@ -50,7 +50,7 @@ export const getBrowserLocale = () => {
   }
   if (language.toLowerCase().startsWith('zh')) {
     const temp = language.toLowerCase().replace('_', '-')
-    return temp === 'zh' ? 'zh-CN' : temp === 'zh-cn' ? 'zh-CN' : 'tw'
+    return temp === 'zh' ? 'zh-CN' : temp === 'zh-cn' ? 'zh-CN' : 'zh-TW'
   }
   return language
 }
@@ -101,6 +101,29 @@ export const isBtnShow = (val: string) => {
   } else {
     return !isInIframe()
   }
+}
+
+export const toLoginPage = (fullPath: string) => {
+  if (!fullPath || fullPath === '/') {
+    return {
+      path: '/login',
+    }
+  }
+  return {
+    path: '/login',
+    query: { redirect: fullPath },
+  }
+}
+
+export const toLoginSuccess = (router: any) => {
+  const redirect = router?.currentRoute?.value?.query?.redirect
+  const redirectPath = Array.isArray(redirect) ? redirect[0] : redirect || '/chat'
+  router.push(redirectPath as string)
+}
+export const getCurrentRouter = () => {
+  const hash = location.hash
+  if (!hash) return null
+  return hash.replace('#/login?redirect=', '')
 }
 
 export const setTitle = (title?: string) => {
@@ -213,15 +236,30 @@ export const getQueryString = (name: string) => {
   return null
 }
 
+export const getUrlParams = () => {
+  const urlParams = new URLSearchParams(window.location.search) as any
+  return Object.fromEntries(urlParams)
+}
+
 export const isLarkPlatform = () => {
   return !!getQueryString('state') && !!getQueryString('code')
+}
+
+export const isPlatform = () => {
+  const state = getQueryString('state')
+  const platformArray = ['wecom', 'dingtalk', 'lark']
+  return (
+    !!state &&
+    !!getQueryString('code') &&
+    platformArray.some((item: string) => state.includes(item))
+  )
 }
 
 export const isPlatformClient = () => {
   return !!getQueryString('client') || getQueryString('state')?.includes('client')
 }
 
-export const checkPlatform = () => {
+/* export const checkPlatform = () => {
   const flagArray = ['/casbi', 'oidcbi']
   const pathname = window.location.pathname
   if (
@@ -237,7 +275,7 @@ export const cleanPlatformFlag = () => {
   const platformKey = 'out_auth_platform'
   wsCache.delete(platformKey)
   return false
-}
+} */
 export function isTablet() {
   const userAgent = navigator.userAgent
   const tabletRegex = /iPad|Silk|Galaxy Tab|PlayBook|BlackBerry|(tablet|ipad|playbook)/i
@@ -249,4 +287,60 @@ export function isMobile() {
       /(phone|pad|pod|iPhone|iPod|ios|iPad|Android|Mobile|BlackBerry|IEMobile|MQQBrowser|JUC|Fennec|wOSBrowser|BrowserNG|WebOS|Symbian|Windows Phone)/i
     ) && !isTablet()
   )
+}
+
+export const getSQLBotAddr = (portEnd?: boolean) => {
+  const addr = location.origin + location.pathname
+  if (!portEnd || !addr.endsWith('/')) {
+    return addr
+  }
+  return addr.substring(0, addr.length - 1)
+}
+
+export const formatArg = (text: string) => {
+  if (!text) {
+    return false
+  }
+  const mappingArray = ['true', 'false', '1', '0']
+  const match = mappingArray.some((item: string) => {
+    return item === text.toLocaleLowerCase()
+  })
+  if (!match) {
+    return text
+  }
+  try {
+    return JSON.parse(text)
+  } catch (e: any) {
+    console.warn(e)
+    return text
+  }
+}
+
+function supportsFlexGap() {
+  const flex = document.createElement('div')
+
+  flex.style.display = 'flex'
+  flex.style.flexDirection = 'column'
+  flex.style.rowGap = '1px'
+
+  const child1 = document.createElement('div')
+  const child2 = document.createElement('div')
+
+  child1.style.height = '1px'
+  child2.style.height = '1px'
+
+  flex.appendChild(child1)
+  flex.appendChild(child2)
+
+  document.body.appendChild(flex)
+
+  const isSupported = flex.scrollHeight === 3
+
+  document.body.removeChild(flex)
+
+  return isSupported
+}
+
+export const isSupportFlexGap = () => {
+  document.documentElement.setAttribute('data-no-flex-gap', String(!supportsFlexGap()))
 }

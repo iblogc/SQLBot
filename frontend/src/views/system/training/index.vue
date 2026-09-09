@@ -4,7 +4,6 @@ import icon_export_outlined from '@/assets/svg/icon_export_outlined.svg'
 import { trainingApi } from '@/api/training'
 import { formatTimestamp } from '@/utils/date'
 import { datasourceApi } from '@/api/datasource'
-import ccmUpload from '@/assets/svg/icon_ccm-upload_outlined.svg'
 import icon_add_outlined from '@/assets/svg/icon_add_outlined.svg'
 import IconOpeEdit from '@/assets/svg/icon_edit_outlined.svg'
 import icon_copy_outlined from '@/assets/embedded/icon_copy_outlined.svg'
@@ -12,10 +11,13 @@ import IconOpeDelete from '@/assets/svg/icon_delete.svg'
 import icon_searchOutline_outlined from '@/assets/svg/icon_search-outline_outlined.svg'
 import EmptyBackground from '@/views/dashboard/common/EmptyBackground.vue'
 import { useClipboard } from '@vueuse/core'
-import { useUserStore } from '@/stores/user'
 import { useI18n } from 'vue-i18n'
 import { cloneDeep } from 'lodash-es'
 import { getAdvancedApplicationList } from '@/api/embedded.ts'
+import Uploader from '@/views/system/excel-upload/Uploader.vue'
+import { convertFilterText, FilterText } from '@/components/filter-text'
+import { DrawerMain } from '@/components/drawer-main'
+import iconFilter from '@/assets/svg/icon-filter_outlined.svg'
 
 interface Form {
   id?: string | null
@@ -26,25 +28,26 @@ interface Form {
   advanced_application_name: string | null
   description: string | null
 }
-const userStore = useUserStore()
 const { t } = useI18n()
 const multipleSelectionAll = ref<any[]>([])
 const keywords = ref('')
 const oldKeywords = ref('')
 const searchLoading = ref(false)
 const { copy } = useClipboard({ legacy: true })
-
 const options = ref<any[]>([])
 const adv_options = ref<any[]>([])
 const selectable = () => {
   return true
 }
 onMounted(() => {
+  datasourceApi.list().then((res) => {
+    filterOption.value[0].option = [...res]
+  })
+  getAdvancedApplicationList().then((res: any) => {
+    adv_options.value = res || []
+    filterOption.value[1].option = [...adv_options.value]
+  })
   search()
-})
-
-const isDefaultOrg = computed(() => {
-  return userStore.oid === '1'
 })
 
 const dialogFormVisible = ref<boolean>(false)
@@ -85,46 +88,60 @@ const cancelDelete = () => {
   checkAll.value = false
   isIndeterminate.value = false
 }
-const exportBatchUser = () => {
-  ElMessageBox.confirm(
-    t('professional.selected_2_terms_de', { msg: multipleSelectionAll.value.length }),
-    {
-      confirmButtonType: 'primary',
-      confirmButtonText: t('professional.export'),
-      cancelButtonText: t('common.cancel'),
-      customClass: 'confirm-no_icon',
-      autofocus: false,
-    }
-  ).then(() => {
-    trainingApi.deleteEmbedded(multipleSelectionAll.value.map((ele) => ele.id)).then(() => {
-      ElMessage({
-        type: 'success',
-        message: t('dashboard.delete_success'),
-      })
-      multipleSelectionAll.value = []
-      search()
-    })
-  })
-}
 
-const exportAllUser = () => {
-  ElMessageBox.confirm(t('professional.all_236_terms', { msg: pageInfo.total }), {
+const exportExcel = () => {
+  ElMessageBox.confirm(t('training.export_hint', { msg: pageInfo.total }), {
     confirmButtonType: 'primary',
     confirmButtonText: t('professional.export'),
     cancelButtonText: t('common.cancel'),
     customClass: 'confirm-no_icon',
     autofocus: false,
   }).then(() => {
-    trainingApi.deleteEmbedded(multipleSelectionAll.value.map((ele) => ele.id)).then(() => {
-      ElMessage({
-        type: 'success',
-        message: t('dashboard.delete_success'),
+    searchLoading.value = true
+    trainingApi
+      .export2Excel(configParams())
+      .then((res) => {
+        const blob = new Blob([res], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        })
+        const link = document.createElement('a')
+        link.href = URL.createObjectURL(blob)
+        link.download = `${t('training.data_training')}.xlsx`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
       })
-      multipleSelectionAll.value = []
-      search()
-    })
+      .catch(async (error) => {
+        if (error.response) {
+          try {
+            let text = await error.response.data.text()
+            try {
+              text = JSON.parse(text)
+            } finally {
+              ElMessage({
+                message: text,
+                type: 'error',
+                showClose: true,
+              })
+            }
+          } catch (e) {
+            console.error('Error processing error response:', e)
+          }
+        } else {
+          console.error('Other error:', error)
+          ElMessage({
+            message: error,
+            type: 'error',
+            showClose: true,
+          })
+        }
+      })
+      .finally(() => {
+        searchLoading.value = false
+      })
   })
 }
+
 const deleteBatchUser = () => {
   ElMessageBox.confirm(
     t('training.training_data_items', { msg: multipleSelectionAll.value.length }),
@@ -203,15 +220,90 @@ const handleToggleRowSelection = (check: boolean = true) => {
   isIndeterminate.value = !(i === 0 || i === arr.length)
 }
 
-const search = () => {
+const drawerMainRef = ref()
+
+const filterOption = ref<any[]>([
+  {
+    type: 'select',
+    option: [],
+    field: 'ds_list',
+    title: t('ds.title'),
+    operate: 'in',
+    single: true,
+    property: { placeholder: t('common.empty') + t('ds.title') },
+  },
+  {
+    type: 'select',
+    option: [],
+    field: 'adv_list',
+    title: t('embedded.advanced_application'),
+    operate: 'in',
+    property: { placeholder: t('common.empty') + t('embedded.advanced_application') },
+  },
+])
+
+const state = reactive<any>({
+  conditions: [],
+  filterTexts: [],
+})
+
+const searchCondition = (conditions: any) => {
+  state.conditions = conditions
+  fillFilterText()
+  search()
+  drawerMainClose()
+}
+const clearFilter = (params?: number) => {
+  let index = params ? params : 0
+  if (isNaN(index)) {
+    state.filterTexts = []
+  } else {
+    state.filterTexts.splice(index, 1)
+  }
+  drawerMainRef.value.clearFilter(index)
+}
+const drawerMainOpen = async () => {
+  drawerMainRef.value.init()
+}
+
+const drawerMainClose = () => {
+  drawerMainRef.value.close()
+}
+
+const fillFilterText = () => {
+  const textArray = state.conditions?.length
+    ? convertFilterText(state.conditions, filterOption.value)
+    : []
+  state.filterTexts = [...textArray]
+  Object.assign(state.filterTexts, textArray)
+}
+
+const configParams = () => {
+  let str = ''
+  if (keywords.value) {
+    str += `question=${keywords.value}`
+  }
+
+  state.conditions.forEach((ele: any) => {
+    ele.value.forEach((itx: any) => {
+      str += str ? `&${ele.field}=${itx}` : `${ele.field}=${itx}`
+    })
+  })
+
+  if (str.length) {
+    str = `?${str}`
+  }
+  return str
+}
+
+const search = ($event: any = {}) => {
+  if ($event?.isComposing) {
+    return
+  }
   searchLoading.value = true
   oldKeywords.value = keywords.value
   trainingApi
-    .getList(
-      pageInfo.currentPage,
-      pageInfo.pageSize,
-      keywords.value ? { question: keywords.value } : {}
-    )
+    .getList(pageInfo.currentPage, pageInfo.pageSize, configParams())
     .then((res) => {
       toggleRowLoading.value = true
       fieldList.value = res.data
@@ -245,14 +337,13 @@ const rules = computed(() => {
       },
     ],
   }
-  if (!isDefaultOrg.value) {
-    _list.datasource = [
-      {
-        required: true,
-        message: t('datasource.Please_select') + t('common.empty') + t('ds.title'),
-      },
-    ]
-  }
+  // _list.datasource = [
+  //   {
+  //     required: true,
+  //     message: t('datasource.Please_select') + t('common.empty') + t('ds.title'),
+  //   },
+  // ]
+
   return _list
 })
 
@@ -260,11 +351,9 @@ const list = () => {
   datasourceApi.list().then((res: any) => {
     options.value = res || []
   })
-  if (isDefaultOrg.value) {
-    getAdvancedApplicationList().then((res: any) => {
-      adv_options.value = res || []
-    })
-  }
+  getAdvancedApplicationList().then((res: any) => {
+    adv_options.value = res || []
+  })
 }
 
 const saveHandler = () => {
@@ -297,6 +386,7 @@ const editHandler = (row: any) => {
   if (row) {
     pageForm.value = cloneDeep(row)
   }
+  console.log(pageForm.value)
   list()
 
   dialogTitle.value = row?.id ? t('training.edit_training_data') : t('training.add_training_data')
@@ -349,13 +439,13 @@ const onRowFormClose = () => {
   <div v-loading="searchLoading" class="training">
     <div class="tool-left">
       <span class="page-title">{{ $t('training.data_training') }}</span>
-      <div>
+      <div class="tool-row flex-gap-fallback">
         <el-input
           v-model="keywords"
-          style="width: 240px; margin-right: 12px"
+          style="width: 240px"
           :placeholder="$t('training.search_problem')"
           clearable
-          @blur="search"
+          @keydown.enter.exact.prevent="search"
         >
           <template #prefix>
             <el-icon>
@@ -363,21 +453,25 @@ const onRowFormClose = () => {
             </el-icon>
           </template>
         </el-input>
-        <template v-if="false">
-          <el-button secondary @click="exportAllUser">
-            <template #icon>
-              <icon_export_outlined />
-            </template>
-            {{ $t('professional.export_all') }}
-          </el-button>
-          <el-button secondary @click="editHandler(null)">
-            <template #icon>
-              <ccmUpload></ccmUpload>
-            </template>
-            {{ $t('user.batch_import') }}
-          </el-button>
-        </template>
-        <el-button type="primary" @click="editHandler(null)">
+        <el-button secondary @click="exportExcel">
+          <template #icon>
+            <icon_export_outlined />
+          </template>
+          {{ $t('professional.export_all') }}
+        </el-button>
+        <Uploader
+          upload-path="/system/data-training/uploadExcel"
+          template-path="/system/data-training/template"
+          :template-name="`${t('training.data_training')}.xlsx`"
+          @upload-finished="search"
+        />
+        <el-button class="no-margin" secondary @click="drawerMainOpen">
+          <template #icon>
+            <iconFilter></iconFilter>
+          </template>
+          {{ $t('user.filter') }}
+        </el-button>
+        <el-button class="no-margin" type="primary" @click="editHandler(null)">
           <template #icon>
             <icon_add_outlined></icon_add_outlined>
           </template>
@@ -388,8 +482,13 @@ const onRowFormClose = () => {
     <div
       v-if="!searchLoading"
       class="table-content"
-      :class="multipleSelectionAll?.length && 'show-pagination_height'"
+      :class="multipleSelectionAll?.length ? 'show-pagination_height' : ''"
     >
+      <filter-text
+        :total="pageInfo.total"
+        :filter-texts="state.filterTexts"
+        @clear-filter="clearFilter"
+      />
       <div class="preview-or-schema">
         <el-table
           ref="multipleTableRef"
@@ -412,7 +511,6 @@ const onRowFormClose = () => {
           </el-table-column>
           <el-table-column prop="datasource_name" :label="$t('ds.title')" min-width="180" />
           <el-table-column
-            v-if="isDefaultOrg"
             prop="advanced_application_name"
             :label="$t('embedded.advanced_application')"
             min-width="180"
@@ -465,11 +563,22 @@ const onRowFormClose = () => {
             </template>
           </el-table-column>
           <template #empty>
-            <EmptyBackground
-              v-if="!oldKeywords && !fieldList.length"
-              :description="$t('chat.no_data')"
-              img-type="noneWhite"
-            />
+            <template v-if="!oldKeywords && !fieldList.length">
+              <EmptyBackground
+                class="datasource-yet"
+                :description="$t('qa.no_data')"
+                img-type="noneWhite"
+              />
+
+              <div style="text-align: center; margin-top: -23px">
+                <el-button type="primary" @click="editHandler(null)">
+                  <template #icon>
+                    <icon_add_outlined></icon_add_outlined>
+                  </template>
+                  {{ $t('prompt.add_sql_sample') }}
+                </el-button>
+              </div>
+            </template>
 
             <EmptyBackground
               v-if="!!oldKeywords && !fieldList.length"
@@ -501,9 +610,6 @@ const onRowFormClose = () => {
       >
         {{ $t('datasource.select_all') }}
       </el-checkbox>
-      <button v-if="false" class="primary-button" @click="exportBatchUser">
-        {{ $t('professional.export') }}
-      </button>
 
       <button class="danger-button" @click="deleteBatchUser">{{ $t('dashboard.delete') }}</button>
 
@@ -566,11 +672,7 @@ const onRowFormClose = () => {
         </el-select>
       </el-form-item>
 
-      <el-form-item
-        v-if="isDefaultOrg"
-        prop="advanced_application"
-        :label="t('embedded.advanced_application')"
-      >
+      <el-form-item prop="advanced_application" :label="t('embedded.advanced_application')">
         <el-select
           v-model="pageForm.advanced_application"
           filterable
@@ -602,7 +704,7 @@ const onRowFormClose = () => {
   </el-drawer>
   <el-drawer
     v-model="rowInfoDialog"
-    :title="$t('professional.professional_term_details')"
+    :title="$t('training.training_data_details')"
     destroy-on-close
     size="600px"
     :before-close="onRowFormClose"
@@ -631,28 +733,32 @@ const onRowFormClose = () => {
           {{ pageForm.datasource_name }}
         </div>
       </el-form-item>
-      <el-form-item v-if="isDefaultOrg" :label="t('embedded.advanced_application')">
+      <el-form-item :label="t('embedded.advanced_application')">
         <div class="content">
           {{ pageForm.advanced_application_name }}
         </div>
       </el-form-item>
     </el-form>
   </el-drawer>
+  <drawer-main
+    ref="drawerMainRef"
+    :filter-options="filterOption"
+    @trigger-filter="searchCondition"
+  />
 </template>
 
 <style lang="less" scoped>
+.no-margin {
+  margin: 0;
+}
 .training {
   height: 100%;
   position: relative;
 
-  :deep(.ed-table__empty-text) {
-     padding-top: 160px;
-  }
-
   .datasource-yet {
     padding-bottom: 0;
     height: auto;
-    padding-top: 200px;
+    padding-top: 80px;
   }
 
   :deep(.ed-table__cell) {
@@ -670,6 +776,14 @@ const onRowFormClose = () => {
       font-size: 20px;
       line-height: 28px;
     }
+  }
+
+  .tool-row {
+    display: flex;
+    align-items: center;
+    flex-direction: row;
+    --gap-size: 8px;
+    gap: 8px;
   }
 
   .pagination-container {
@@ -843,6 +957,12 @@ const onRowFormClose = () => {
 .training-add_drawer {
   .ed-textarea__inner {
     line-height: 22px;
+  }
+}
+.upload-user {
+  height: 32px;
+  .ed-upload {
+    width: 100% !important;
   }
 }
 </style>

@@ -117,7 +117,7 @@ const pageLogo = computed(() => {
         virtual-triggering
         trigger="click"
         :teleported="false"
-        popper-class="popover-card"
+        popper-class="popover-card_embedded"
         placement="bottom-start"
       >
         <div class="content">
@@ -185,7 +185,7 @@ const pageLogo = computed(() => {
     .default {
       margin-left: auto;
       padding: 0 4px;
-      border-radius: 4px;
+      border-radius: 6px;
       font-weight: 400;
       font-size: 12px;
       line-height: 20px;
@@ -256,9 +256,9 @@ const pageLogo = computed(() => {
 </style>
 
 <style lang="less">
-.popover-card.popover-card.popover-card {
+.popover-card_embedded.popover-card_embedded.popover-card_embedded {
   box-shadow: 0px 4px 8px 0px #1f23291a;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid #dee0e3;
   width: fit-content !important;
   min-width: 120px !important;
@@ -300,7 +300,7 @@ const pageLogo = computed(() => {
         content: '';
         width: calc(100% - 8px);
         height: 32px;
-        border-radius: 4px;
+        border-radius: 6px;
         position: absolute;
         top: 50%;
         left: 50%;

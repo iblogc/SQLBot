@@ -7,6 +7,7 @@ import { computed, ref, unref } from 'vue'
 import { ClickOutside as vClickOutside } from 'element-plus-secondary'
 import { dsTypeWithImg } from './js/ds-type'
 import edit from '@/assets/svg/icon_edit_outlined.svg'
+import icon_recommended_problem from '@/assets/svg/icon_recommended_problem.svg'
 import { datasourceApi } from '@/api/datasource.ts'
 
 const props = withDefaults(
@@ -27,12 +28,25 @@ const props = withDefaults(
   }
 )
 
-const emits = defineEmits(['edit', 'del', 'question', 'dataTableDetail', 'showTable'])
+const emits = defineEmits([
+  'edit',
+  'del',
+  'question',
+  'dataTableDetail',
+  'showTable',
+  'recommendation',
+  'startChecking',
+  'endChecking',
+])
 const icon = computed(() => {
   return (dsTypeWithImg.find((ele) => props.type === ele.type) || {}).img
 })
 const handleEdit = () => {
   emits('edit')
+}
+
+const handleRecommendation = () => {
+  emits('recommendation')
 }
 
 const handleDel = () => {
@@ -41,11 +55,17 @@ const handleDel = () => {
 
 const handleQuestion = () => {
   //check first
-  datasourceApi.check_by_id(props.id).then((res: any) => {
-    if (res) {
-      emits('question', props.id)
-    }
-  })
+  emits('startChecking')
+  datasourceApi
+    .check_by_id(props.id)
+    .then((res: any) => {
+      if (res) {
+        emits('question', props.id)
+      }
+    })
+    .finally(() => {
+      emits('endChecking')
+    })
 }
 
 function runSQL() {
@@ -114,7 +134,7 @@ const onClickOutside = () => {
           virtual-triggering
           trigger="click"
           :teleported="false"
-          popper-class="popover-card"
+          popper-class="popover-card_ds"
           placement="bottom-end"
         >
           <div class="content">
@@ -123,6 +143,12 @@ const onClickOutside = () => {
                 <edit></edit>
               </el-icon>
               {{ $t('datasource.edit') }}
+            </div>
+            <div class="item" @click.stop="handleRecommendation">
+              <el-icon size="16">
+                <icon_recommended_problem></icon_recommended_problem>
+              </el-icon>
+              {{ $t('datasource.recommended_problem_configuration') }}
             </div>
             <div class="item" @click.stop="handleDel">
               <el-icon size="16">
@@ -255,9 +281,9 @@ const onClickOutside = () => {
 </style>
 
 <style lang="less">
-.popover-card.popover-card.popover-card {
+.popover-card_ds.popover-card_ds.popover-card_ds {
   box-shadow: 0px 4px 8px 0px #1f23291a;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid #dee0e3;
   width: fit-content !important;
   min-width: 120px !important;
@@ -269,7 +295,7 @@ const onClickOutside = () => {
     &::after {
       position: absolute;
       content: '';
-      top: 40px;
+      top: 80px !important;
       left: 0;
       width: 100%;
       height: 1px;
@@ -299,7 +325,7 @@ const onClickOutside = () => {
         content: '';
         width: calc(100% - 8px);
         height: 32px;
-        border-radius: 4px;
+        border-radius: 6px;
         position: absolute;
         top: 50%;
         left: 50%;

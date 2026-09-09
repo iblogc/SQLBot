@@ -169,7 +169,7 @@ const getDsList = (row: any) => {
 
   if (row) {
     handleDsIdChange({ id: row.ds_id, name: row.ds_name })
-    handleEditeTable(row.table_id)
+    handleEditeTable(row.ds_id, row.table_id)
   }
 }
 const handleRowPermission = (row: any) => {
@@ -252,7 +252,7 @@ const handleDsIdChange = (val: any) => {
 const handleTableIdChange = (val: any) => {
   columnForm.table_id = val.id
   columnForm.table_name = val.table_name
-  datasourceApi.fieldList(val.id).then((res: any) => {
+  datasourceApi.fieldList(val.ds_id, val.id).then((res: any) => {
     fieldListOptions.value = res || []
     if (columnForm.type === 'row') return
     columnForm.permissions = fieldListOptions.value.map((ele) => {
@@ -262,9 +262,9 @@ const handleTableIdChange = (val: any) => {
   })
 }
 
-const handleEditeTable = (val: any) => {
+const handleEditeTable = (ds_id: any, val: any) => {
   datasourceApi
-    .fieldList(val)
+    .fieldList(ds_id, val)
     .then((res: any) => {
       fieldListOptions.value = res || []
       if (columnForm.type === 'row') return
@@ -867,7 +867,7 @@ const columnRules = {
           <el-input
             v-if="ruleType !== 1"
             v-model="searchColumn"
-            :placeholder="$t('permission.search_rule_group')"
+            :placeholder="$t('permission.search_field')"
             autocomplete="off"
             clearable
             ><template #prefix>
@@ -1103,7 +1103,7 @@ const columnRules = {
       padding-left: 12px;
       padding-right: 8px;
       position: relative;
-      border-radius: 4px;
+      border-radius: 6px;
       cursor: pointer;
       &:hover {
         background: #1f23291a;

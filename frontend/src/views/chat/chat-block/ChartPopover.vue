@@ -81,7 +81,7 @@ const handleDefaultChatChange = (val: any) => {
 <style lang="less">
 .chat-type_select.chat-type_select {
   padding: 4px 0;
-  width: 120px !important;
+  width: auto !important;
   min-width: 120px !important;
   box-shadow: 0px 4px 8px 0px #1f23291a;
   border: 1px solid #dee0e3;
@@ -110,7 +110,7 @@ const handleDefaultChatChange = (val: any) => {
       padding-right: 8px;
       margin-bottom: 2px;
       position: relative;
-      border-radius: 4px;
+      border-radius: 6px;
       cursor: pointer;
       &:last-child {
         margin-bottom: 0;
@@ -148,7 +148,7 @@ const handleDefaultChatChange = (val: any) => {
 .chat-select_type {
   width: 40px;
   height: 24px;
-  border-radius: 4px;
+  border-radius: 6px;
   padding-left: 4px;
   display: flex;
   align-items: center;

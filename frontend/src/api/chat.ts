@@ -1,5 +1,8 @@
 import { request } from '@/utils/request'
 import { getDate } from '@/utils/utils.ts'
+import { i18n } from '@/i18n'
+
+const { t } = i18n.global
 
 export const questionApi = {
   pager: (pageNumber: number, pageSize: number) =>
@@ -36,6 +39,7 @@ export class ChatRecord {
   question?: string
   sql_answer?: string
   sql?: string
+  datasource?: number
   data?: string | any
   chart_answer?: string
   chart?: string
@@ -51,6 +55,9 @@ export class ChatRecord {
   recommended_question?: string
   analysis_record_id?: number
   predict_record_id?: number
+  regenerate_record_id?: number
+  duration?: number
+  total_tokens?: number
 
   constructor()
   constructor(
@@ -61,6 +68,7 @@ export class ChatRecord {
     question: string,
     sql_answer: string | undefined,
     sql: string | undefined,
+    datasource: number | undefined,
     data: string | any | undefined,
     chart_answer: string | undefined,
     chart: string | undefined,
@@ -75,7 +83,10 @@ export class ChatRecord {
     first_chat: boolean,
     recommended_question: string | undefined,
     analysis_record_id: number | undefined,
-    predict_record_id: number | undefined
+    predict_record_id: number | undefined,
+    regenerate_record_id: number | undefined,
+    duration: number | undefined,
+    total_tokens: number | undefined
   )
   constructor(
     id?: number,
@@ -85,6 +96,7 @@ export class ChatRecord {
     question?: string,
     sql_answer?: string,
     sql?: string,
+    datasource?: number | undefined,
     data?: string | any,
     chart_answer?: string,
     chart?: string,
@@ -99,7 +111,10 @@ export class ChatRecord {
     first_chat?: boolean,
     recommended_question?: string,
     analysis_record_id?: number,
-    predict_record_id?: number
+    predict_record_id?: number,
+    regenerate_record_id?: number,
+    duration?: number,
+    total_tokens?: number
   ) {
     this.id = id
     this.chat_id = chat_id
@@ -108,6 +123,7 @@ export class ChatRecord {
     this.question = question
     this.sql_answer = sql_answer
     this.sql = sql
+    this.datasource = datasource
     this.data = data
     this.chart_answer = chart_answer
     this.chart = chart
@@ -123,23 +139,30 @@ export class ChatRecord {
     this.recommended_question = recommended_question
     this.analysis_record_id = analysis_record_id
     this.predict_record_id = predict_record_id
+    this.regenerate_record_id = regenerate_record_id
+    this.duration = duration
+    this.total_tokens = total_tokens
   }
 }
 
 export class Chat {
   id?: number
   create_time?: Date | string
+  latest_record_time?: Date | string
   create_by?: number
   brief?: string
   chat_type?: string
   datasource?: number
   engine_type?: string
   ds_type?: string
+  recommended_question?: string | undefined
+  recommended_generate?: boolean | undefined
 
   constructor()
   constructor(
     id: number,
     create_time: Date | string,
+    latest_record_time: Date | string,
     create_by: number,
     brief: string,
     chat_type: string,
@@ -149,6 +172,7 @@ export class Chat {
   constructor(
     id?: number,
     create_time?: Date | string,
+    latest_record_time?: Date | string,
     create_by?: number,
     brief?: string,
     chat_type?: string,
@@ -157,6 +181,7 @@ export class Chat {
   ) {
     this.id = id
     this.create_time = getDate(create_time)
+    this.latest_record_time = getDate(latest_record_time ?? create_time)
     this.create_by = create_by
     this.brief = brief
     this.chat_type = chat_type
@@ -175,6 +200,7 @@ export class ChatInfo extends Chat {
   constructor(
     id: number,
     create_time: Date | string,
+    latest_record_time: Date | string,
     create_by: number,
     brief: string,
     chat_type: string,
@@ -183,11 +209,14 @@ export class ChatInfo extends Chat {
     ds_type: string,
     datasource_name: string,
     datasource_exists: boolean,
-    records: Array<ChatRecord>
+    records: Array<ChatRecord>,
+    recommended_question?: string | undefined,
+    recommended_generate?: boolean | undefined
   )
   constructor(
     param1?: number | Chat,
     create_time?: Date | string,
+    latest_record_time?: Date | string,
     create_by?: number,
     brief?: string,
     chat_type?: string,
@@ -196,28 +225,36 @@ export class ChatInfo extends Chat {
     ds_type?: string,
     datasource_name?: string,
     datasource_exists: boolean = true,
-    records: Array<ChatRecord> = []
+    records: Array<ChatRecord> = [],
+    recommended_question?: string | undefined,
+    recommended_generate?: boolean | undefined
   ) {
     super()
     if (param1 !== undefined) {
       if (param1 instanceof Chat) {
         this.id = param1.id
         this.create_time = getDate(param1.create_time)
+        this.latest_record_time = getDate(param1.latest_record_time ?? param1.create_time)
         this.create_by = param1.create_by
         this.brief = param1.brief
         this.chat_type = param1.chat_type
         this.datasource = param1.datasource
         this.engine_type = param1.engine_type
         this.ds_type = param1.ds_type
+        this.recommended_question = recommended_question
+        this.recommended_generate = recommended_generate
       } else {
         this.id = param1
         this.create_time = getDate(create_time)
+        this.latest_record_time = getDate(latest_record_time ?? create_time)
         this.create_by = create_by
         this.brief = brief
         this.chat_type = chat_type
         this.datasource = datasource
         this.engine_type = engine_type
         this.ds_type = ds_type
+        this.recommended_question = recommended_question
+        this.recommended_generate = recommended_generate
       }
     }
     this.datasource_name = datasource_name
@@ -238,6 +275,7 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
     data.question,
     data.sql_answer,
     data.sql,
+    data.datasource,
     data.data,
     data.chart_answer,
     data.chart,
@@ -252,13 +290,117 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
     data.first_chat,
     data.recommended_question,
     data.analysis_record_id,
-    data.predict_record_id
+    data.predict_record_id,
+    data.regenerate_record_id,
+    data.duration,
+    data.total_tokens
   )
 }
 const toChatRecordList = (list: any = []): ChatRecord[] => {
   const records: Array<ChatRecord> = []
   for (let i = 0; i < list.length; i++) {
     const record = toChatRecord(list[i])
+    if (record) {
+      records.push(record)
+    }
+  }
+  return records
+}
+
+export class ChatLogHistoryItem {
+  start_time?: Date | string
+  finish_time?: Date | string
+  duration?: number | undefined
+  total_tokens?: number | undefined
+  operate?: string | undefined
+  operate_key?: string | undefined
+  local_operation?: boolean | undefined
+  error?: boolean | undefined
+  message?: any
+
+  constructor()
+  constructor(
+    start_time: Date | string,
+    finish_time: Date | string,
+    duration: number | undefined,
+    total_tokens: number | undefined,
+    operate: string | undefined,
+    local_operation: boolean | undefined,
+    error: boolean | undefined,
+    message: any | undefined
+  )
+  constructor(
+    start_time?: Date | string,
+    finish_time?: Date | string,
+    duration?: number | undefined,
+    total_tokens?: number | undefined,
+    operate?: string | undefined,
+    local_operation?: boolean | undefined,
+    error?: boolean | undefined,
+    message?: any | undefined
+  ) {
+    this.start_time = getDate(start_time)
+    this.finish_time = getDate(finish_time)
+    this.duration = duration
+    this.total_tokens = total_tokens
+    this.operate_key = operate
+    this.operate = t('chat.log.' + operate)
+    this.local_operation = !!local_operation
+    this.error = !!error
+    this.message = message
+  }
+}
+
+export class ChatLogHistory {
+  start_time?: Date | string
+  finish_time?: Date | string
+  duration?: number | undefined
+  total_tokens?: number | undefined
+  steps?: Array<ChatLogHistoryItem> | undefined
+
+  constructor()
+  constructor(
+    start_time: Date | string,
+    finish_time: Date | string,
+    duration: number | undefined,
+    total_tokens: number | undefined,
+    steps: Array<ChatLogHistoryItem> | undefined
+  )
+  constructor(
+    start_time?: Date | string,
+    finish_time?: Date | string,
+    duration?: number | undefined,
+    total_tokens?: number | undefined,
+    steps?: Array<ChatLogHistoryItem> | undefined
+  ) {
+    this.start_time = getDate(start_time)
+    this.finish_time = getDate(finish_time)
+    this.duration = duration
+    this.total_tokens = total_tokens
+    this.steps = steps ? steps : []
+  }
+}
+
+const toChatLogHistoryItem = (data?: any): any | undefined => {
+  if (!data) {
+    return undefined
+  }
+  return new ChatLogHistoryItem(
+    data.start_time,
+    data.finish_time,
+    data.duration,
+    data.total_tokens,
+    data.operate,
+    data.local_operation,
+    data.error,
+    data.message
+  )
+}
+
+const toChatLogHistoryItemList = (list: any = []): ChatLogHistoryItem[] => {
+  const records: Array<ChatLogHistoryItem> = []
+  for (let i = 0; i < list.length; i++) {
+    const record = toChatLogHistoryItem(list[i])
     if (record) {
       records.push(record)
     }
@@ -274,6 +416,7 @@ export const chatApi = {
     return new ChatInfo(
       data.id,
       data.create_time,
+      data.latest_record_time,
       data.create_by,
       data.brief,
       data.chat_type,
@@ -282,7 +425,9 @@ export const chatApi = {
       data.ds_type,
       data.datasource_name,
       data.datasource_exists,
-      toChatRecordList(data.records)
+      toChatRecordList(data.records),
+      data.recommended_question,
+      data.recommended_generate
     )
   },
   toChatInfoList: (list: any[] = []): ChatInfo[] => {
@@ -294,6 +439,18 @@ export const chatApi = {
       }
     }
     return infos
+  },
+  toChatLogHistory: (data?: any): ChatLogHistory | undefined => {
+    if (!data) {
+      return undefined
+    }
+    return new ChatLogHistory(
+      data.start_time,
+      data.finish_time,
+      data.duration,
+      data.total_tokens,
+      toChatLogHistoryItemList(data.steps)
+    )
   },
   list: (): Promise<Array<ChatInfo>> => {
     return request.get('/chat/list')
@@ -310,17 +467,23 @@ export const chatApi = {
   get_chart_predict_data: (record_id?: number): Promise<any> => {
     return request.get(`/chat/record/${record_id}/predict_data`)
   },
+  get_chart_log_history: (record_id?: number): Promise<any> => {
+    return request.get(`/chat/record/${record_id}/log`)
+  },
+  get_chart_usage: (record_id?: number): Promise<any> => {
+    return request.get(`/chat/record/${record_id}/usage`)
+  },
   startChat: (data: any): Promise<ChatInfo> => {
     return request.post('/chat/start', data)
   },
-  startAssistantChat: (): Promise<ChatInfo> => {
-    return request.post('/chat/assistant/start')
+  startAssistantChat: (data?: any): Promise<ChatInfo> => {
+    return request.post('/chat/assistant/start', Object.assign({ origin: 2 }, data))
   },
   renameChat: (chat_id: number | undefined, brief: string): Promise<string> => {
     return request.post('/chat/rename', { id: chat_id, brief: brief })
   },
-  deleteChat: (id: number | undefined): Promise<string> => {
-    return request.delete(`/chat/${id}`)
+  deleteChat: (id: number | undefined, brief: any): Promise<string> => {
+    return request.delete(`/chat/${id}`, { data: { id: id, brief: brief } })
   },
   analysis: (record_id: number | undefined, controller?: AbortController) => {
     return request.fetchStream(`/chat/record/${record_id}/analysis`, {}, controller)
@@ -328,12 +491,19 @@ export const chatApi = {
   predict: (record_id: number | undefined, controller?: AbortController) => {
     return request.fetchStream(`/chat/record/${record_id}/predict`, {}, controller)
   },
-  recommendQuestions: (record_id: number | undefined, controller?: AbortController) => {
-    return request.fetchStream(`/chat/recommend_questions/${record_id}`, {}, controller)
+  recommendQuestions: (
+    record_id: number | undefined,
+    controller?: AbortController,
+    params?: any
+  ) => {
+    return request.fetchStream(`/chat/recommend_questions/${record_id}${params}`, {}, controller)
+  },
+  recentQuestions: (datasource_id?: number): Promise<any> => {
+    return request.get(`/chat/recent_questions/${datasource_id}`)
   },
   checkLLMModel: () => request.get('/system/aimodel/default', { requestOptions: { silent: true } }),
-  export2Excel: (record_id: number | undefined) =>
-    request.get(`/chat/record/${record_id}/excel/export`, {
+  export2Excel: (record_id: number | undefined, chat_id: any) =>
+    request.get(`/chat/record/${record_id}/excel/export/${chat_id}`, {
       responseType: 'blob',
       requestOptions: { customError: true },
     }),

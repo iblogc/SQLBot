@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import BaseAnswer from './BaseAnswer.vue'
-import { chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/chat.ts'
+import { Chat, chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/chat.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import MdComponent from '@/views/chat/component/MdComponent.vue'
 import ChartBlock from '@/views/chat/chat-block/ChartBlock.vue'
@@ -100,6 +100,13 @@ const sendMessage = async () => {
   if (error) return
 
   try {
+    _currentChat.value.latest_record_time = new Date()
+    _chatList.value.forEach((c: Chat) => {
+      if (c.id === _currentChat.value.id) {
+        c.latest_record_time = _currentChat.value.latest_record_time
+      }
+    })
+
     const controller: AbortController = new AbortController()
     const response = await chatApi.predict(currentRecord.predict_record_id, controller)
     const reader = response.body.getReader()
@@ -162,7 +169,7 @@ const sendMessage = async () => {
                 break
               case 'error':
                 currentRecord.error = data.content
-                emits('error')
+                emits('error', currentRecord.id)
                 break
               case 'predict-result':
                 predict_answer += data.reasoning_content
@@ -171,7 +178,7 @@ const sendMessage = async () => {
                 _currentChat.value.records[index.value].predict_content = predict_content
                 break
               case 'predict-failed':
-                emits('error')
+                emits('error', currentRecord.id)
                 break
               case 'predict-success':
                 //currentChat.value.records[_index].predict_data = data.content
@@ -217,7 +224,7 @@ function getChatPredictData(recordId?: number) {
           has = true
           record.predict_data = response ?? []
 
-          if (record.predict_data.length > 1) {
+          if (record.predict_data.length > 0) {
             getChatData(recordId)
           } else {
             loadingData.value = false
@@ -257,6 +264,9 @@ function stop() {
   emits('stop')
 }
 
+const enableThousandsSeparatorList = ref<Array<string>>([])
+const showLabel = ref<boolean>(false)
+
 onBeforeUnmount(() => {
   stop()
 })
@@ -276,6 +286,8 @@ defineExpose({ sendMessage, index: () => index.value, chatList: () => _chatList,
     <ChartBlock
       v-if="message.record?.predict_data?.length > 0 && message.record?.data"
       ref="chartBlockRef"
+      v-model:show-label="showLabel"
+      v-model:thousands-separator-list="enableThousandsSeparatorList"
       style="margin-top: 12px"
       :record-id="recordId"
       :message="message"

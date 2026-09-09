@@ -29,7 +29,7 @@ def get_version_sql(ds: CoreDatasource, conf: DatasourceConf):
         return """
                 SELECT * FROM v$version
                 """
-    elif equals_ignore_case(ds.type, "redshift"):
+    elif equals_ignore_case(ds.type, "redshift", "sqlite", "hive"):
         return ''
 
 
@@ -63,7 +63,7 @@ def get_table_sql(ds: CoreDatasource, conf: DatasourceConf, db_version: str = ''
     elif equals_ignore_case(ds.type, "pg", "excel"):
         return """
               SELECT c.relname                                       AS TABLE_NAME,
-                     COALESCE(d.description, obj_description(c.oid)) AS TABLE_COMMENT
+                     COALESCE(COALESCE(d.description, obj_description(c.oid)), '') AS TABLE_COMMENT
               FROM pg_class c
                        LEFT JOIN
                    pg_namespace n ON n.oid = c.relnamespace
@@ -73,7 +73,7 @@ def get_table_sql(ds: CoreDatasource, conf: DatasourceConf, db_version: str = ''
                 AND c.relkind IN ('r', 'v', 'p', 'm')
                 AND c.relname NOT LIKE 'pg_%'
                 AND c.relname NOT LIKE 'sql_%'
-              ORDER BY c.relname \
+              ORDER BY c.relname
               """, conf.dbSchema
     elif equals_ignore_case(ds.type, "oracle"):
         return """
@@ -103,7 +103,7 @@ def get_table_sql(ds: CoreDatasource, conf: DatasourceConf, db_version: str = ''
         version = int(db_version.split('.')[0])
         if version < 22:
             return """
-                    SELECT name, null as comment
+                    SELECT name, '' as comment
                     FROM system.tables
                     WHERE database = :param
                       AND engine NOT IN ('Dictionary')
@@ -148,20 +148,24 @@ def get_table_sql(ds: CoreDatasource, conf: DatasourceConf, db_version: str = ''
     elif equals_ignore_case(ds.type, "kingbase"):
         return """
               SELECT c.relname                                       AS TABLE_NAME,
-                     COALESCE(d.description, obj_description(c.oid)) AS TABLE_COMMENT
+                     COALESCE(COALESCE(d.description, obj_description(c.oid)), '') AS TABLE_COMMENT
               FROM pg_class c
                        LEFT JOIN
                    pg_namespace n ON n.oid = c.relnamespace
                        LEFT JOIN
                    pg_description d ON d.objoid = c.oid AND d.objsubid = 0
-              WHERE n.nspname = '{0}'
+              WHERE n.nspname = %s
                 AND c.relkind IN ('r', 'v', 'p', 'm')
-                AND c.relname NOT LIKE 'pg_%'
-                AND c.relname NOT LIKE 'sql_%'
-              ORDER BY c.relname \
+                AND c.relname NOT LIKE 'pg_%%'
+                AND c.relname NOT LIKE 'sql_%%'
+              ORDER BY c.relname
               """, conf.dbSchema
     elif equals_ignore_case(ds.type, "es"):
         return "", None
+    elif equals_ignore_case(ds.type, "hive"):
+        return """
+                SHOW TABLES
+                """, None
 
 
 def get_field_sql(ds: CoreDatasource, conf: DatasourceConf, table_name: str = None):
@@ -208,7 +212,7 @@ def get_field_sql(ds: CoreDatasource, conf: DatasourceConf, table_name: str = No
                     pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                WHERE n.nspname = :param1
                  AND a.attnum > 0
-                 AND NOT a.attisdropped \
+                 AND NOT a.attisdropped
                """
         sql2 = " AND c.relname = :param2" if table_name is not None and table_name != "" else ""
         return sql1 + sql2, conf.dbSchema, table_name
@@ -224,7 +228,7 @@ def get_field_sql(ds: CoreDatasource, conf: DatasourceConf, table_name: str = No
                     pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                WHERE n.nspname = %s
                  AND a.attnum > 0
-                 AND NOT a.attisdropped \
+                 AND NOT a.attisdropped
                """
         sql2 = " AND c.relname = %s" if table_name is not None and table_name != "" else ""
         return sql1 + sql2, conf.dbSchema, table_name
@@ -271,11 +275,10 @@ def get_field_sql(ds: CoreDatasource, conf: DatasourceConf, table_name: str = No
                     c.DATA_TYPE      AS "DATA_TYPE",
                     COALESCE(com.COMMENTS, '') AS "COMMENTS"
                 FROM 
-                    ALL_TAB_COLS c
+                    ALL_TAB_COLUMNS c
                 LEFT JOIN 
                     ALL_COL_COMMENTS com 
-                    ON c.OWNER = com.OWNER 
-                   AND c.TABLE_NAME = com.TABLE_NAME 
+                    ON c.TABLE_NAME = com.TABLE_NAME 
                    AND c.COLUMN_NAME = com.COLUMN_NAME
                 WHERE 
                     c.OWNER = :param1
@@ -305,11 +308,14 @@ def get_field_sql(ds: CoreDatasource, conf: DatasourceConf, table_name: str = No
                             pg_catalog.pg_class c ON a.attrelid = c.oid
                                 JOIN
                             pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                       WHERE n.nspname = '{0}'
+                       WHERE n.nspname = %s
                          AND a.attnum > 0
-                         AND NOT a.attisdropped \
+                         AND NOT a.attisdropped
                        """
-        sql2 = " AND c.relname = '{1}'" if table_name is not None and table_name != "" else ""
+        sql2 = " AND c.relname = %s" if table_name is not None and table_name != "" else ""
         return sql1 + sql2, conf.dbSchema, table_name
     elif equals_ignore_case(ds.type, "es"):
         return "", None, None
+    elif equals_ignore_case(ds.type, "hive"):
+        sql1 = f"DESCRIBE {table_name}"
+        return sql1, None, None

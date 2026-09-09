@@ -3,17 +3,17 @@ import icon_more_outlined from '@/assets/svg/icon_more_outlined.svg'
 import icon_expand_down_filled from '@/assets/embedded/icon_expand-down_filled.svg'
 import rename from '@/assets/svg/icon_rename_outlined.svg'
 import delIcon from '@/assets/svg/icon_delete.svg'
-import { type Chat, chatApi } from '@/api/chat.ts'
+import { type Chat, chatApi, ChatInfo } from '@/api/chat.ts'
 import { computed, reactive, ref } from 'vue'
 import dayjs from 'dayjs'
 import { getDate } from '@/utils/utils.ts'
-import { groupBy } from 'lodash-es'
+import { groupBy, orderBy } from 'lodash-es'
 import { useI18n } from 'vue-i18n'
 
 const props = withDefaults(
   defineProps<{
     currentChatId?: number
-    chatList: Array<Chat>
+    chatList: Array<ChatInfo>
     loading?: boolean
   }>(),
   {
@@ -30,7 +30,7 @@ function groupByDate(chat: Chat) {
   const todayEnd = dayjs(dayjs().format('YYYY-MM-DD') + ' 23:59:59').toDate()
   const weekStart = dayjs(dayjs().subtract(7, 'day').format('YYYY-MM-DD') + ' 00:00:00').toDate()
 
-  const time = getDate(chat.create_time)
+  const time = getDate(chat.latest_record_time ?? chat.create_time)
 
   if (time) {
     if (time >= todayStart && time <= todayEnd) {
@@ -48,7 +48,10 @@ function groupByDate(chat: Chat) {
 }
 
 const computedChatGroup = computed(() => {
-  return groupBy(props.chatList, groupByDate)
+  return groupBy(
+    orderBy(props.chatList, [(c: Chat) => c.latest_record_time ?? c.create_time], ['desc']),
+    groupByDate
+  )
 })
 
 const expandMap = ref({
@@ -122,7 +125,7 @@ function handleCommand(command: string | number | object, chat: Chat) {
         }).then(() => {
           _loading.value = true
           chatApi
-            .deleteChat(chat.id)
+            .deleteChat(chat.id, chat.brief)
             .then(() => {
               ElMessage({
                 type: 'success',
@@ -200,7 +203,7 @@ const handleConfirmPassword = () => {
 
 <template>
   <el-scrollbar ref="chatListRef">
-    <div class="chat-list-inner">
+    <div class="chat-list-inner flex-gap-fallback flex-col">
       <div v-for="group in computedChatList" :key="group.key" class="group">
         <div
           class="group-title"
@@ -219,7 +222,7 @@ const handleConfirmPassword = () => {
             @click="onClickHistory(chat)"
           >
             <span class="title">{{ chat.brief ?? 'Untitled' }}</span>
-            <el-popover :teleported="false" popper-class="popover-card" placement="bottom">
+            <el-popover :teleported="false" popper-class="popover-card_chat" placement="bottom">
               <template #reference>
                 <el-icon
                   class="more"
@@ -301,6 +304,7 @@ const handleConfirmPassword = () => {
   display: flex;
   flex-direction: column;
 
+  --gap-size: 16px;
   gap: 16px;
 
   .group {
@@ -397,9 +401,9 @@ const handleConfirmPassword = () => {
 </style>
 
 <style lang="less">
-.popover-card.popover-card.popover-card {
+.popover-card_chat.popover-card_chat.popover-card_chat {
   box-shadow: 0px 4px 8px 0px #1f23291a;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid #dee0e3;
   width: fit-content !important;
   min-width: 120px !important;
@@ -436,7 +440,7 @@ const handleConfirmPassword = () => {
         content: '';
         width: calc(100% - 8px);
         height: 32px;
-        border-radius: 4px;
+        border-radius: 6px;
         position: absolute;
         top: 50%;
         left: 50%;

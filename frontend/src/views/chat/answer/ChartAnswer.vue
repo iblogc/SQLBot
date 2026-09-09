@@ -3,6 +3,7 @@ import BaseAnswer from './BaseAnswer.vue'
 import { Chat, chatApi, ChatInfo, type ChatMessage, ChatRecord, questionApi } from '@/api/chat.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChartBlock from '@/views/chat/chat-block/ChartBlock.vue'
+import JSONBig from 'json-bigint'
 
 const props = withDefaults(
   defineProps<{
@@ -101,6 +102,13 @@ const sendMessage = async () => {
   if (error) return
 
   try {
+    _currentChat.value.latest_record_time = new Date()
+    _chatList.value.forEach((c: Chat) => {
+      if (c.id === _currentChat.value.id) {
+        c.latest_record_time = _currentChat.value.latest_record_time
+      }
+    })
+
     const controller: AbortController = new AbortController()
     const param = {
       question: currentRecord.question,
@@ -141,7 +149,7 @@ const sendMessage = async () => {
           for (const str of split) {
             let data
             try {
-              data = JSON.parse(str.replace('data:{', '{'))
+              data = JSONBig.parse(str.replace('data:{', '{'))
             } catch (err) {
               console.error('JSON string:', str)
               throw err
@@ -162,6 +170,15 @@ const sendMessage = async () => {
                 currentRecord.id = data.id
                 _currentChat.value.records[index.value].id = data.id
                 break
+              case 'regenerate_record_id':
+                currentRecord.regenerate_record_id = data.regenerate_record_id
+                _currentChat.value.records[index.value].regenerate_record_id =
+                  data.regenerate_record_id
+                break
+              case 'question':
+                currentRecord.question = data.question
+                _currentChat.value.records[index.value].question = data.question
+                break
               case 'info':
                 console.info(data.msg)
                 break
@@ -175,7 +192,7 @@ const sendMessage = async () => {
                 break
               case 'error':
                 currentRecord.error = data.content
-                emits('error')
+                emits('error', currentRecord.id)
                 break
               case 'sql-result':
                 sql_answer += data.reasoning_content
@@ -193,6 +210,11 @@ const sendMessage = async () => {
                 break
               case 'chart':
                 _currentChat.value.records[index.value].chart = data.content
+                break
+              case 'datasource':
+                if (!_currentChat.value.datasource) {
+                  _currentChat.value.datasource = data.id
+                }
                 break
               case 'finish':
                 emits('finish', currentRecord.id)
@@ -243,6 +265,9 @@ function stop() {
   emits('stop')
 }
 
+const enableThousandsSeparatorList = ref<Array<string>>([])
+const showLabel = ref<boolean>(false)
+
 onBeforeUnmount(() => {
   stop()
 })
@@ -259,6 +284,8 @@ defineExpose({ sendMessage, index: () => index.value, stop })
 <template>
   <BaseAnswer v-if="message" :message="message" :reasoning-name="reasoningName" :loading="_loading">
     <ChartBlock
+      v-model:show-label="showLabel"
+      v-model:thousands-separator-list="enableThousandsSeparatorList"
       style="margin-top: 6px"
       :message="message"
       :record-id="recordId"

@@ -7,7 +7,7 @@ on:
     inputs:
       dockerImageTag:
         description: 'Image Tag'
-        default: 'v0.9.0'
+        default: 'dev'
         required: true
       dockerImageTagWithLatest:
         description: '是否发布latest tag（正式发版时选择，测试版本切勿选择）'
@@ -81,7 +81,7 @@ jobs:
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
       - name: Docker Buildx (build-and-push)
         run: |
-          docker buildx build --output "type=image,push=true" ${{ steps.prepare.outputs.buildx_args }}
+          docker buildx build --provenance=false --sbom=false --output "type=image,push=true" ${{ steps.prepare.outputs.buildx_args }}
 
   build-and-push-to-dockerhub:
     if: ${{ contains(github.event.inputs.registry, 'dockerhub') }}
