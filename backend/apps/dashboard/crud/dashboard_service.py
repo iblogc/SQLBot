@@ -79,7 +79,16 @@ def create_resource(session: SessionDep, user: CurrentUser, dashboard: CreateDas
 
 
 def update_resource(session: SessionDep, user: CurrentUser, dashboard: QueryDashboard):
-    record = session.query(CoreDashboard).filter(CoreDashboard.id == dashboard.id).first()
+    # 添加权限检查：只能更新自己创建的、且在自己工作空间的 Dashboard
+    record = session.query(CoreDashboard).filter(
+        CoreDashboard.id == dashboard.id,
+        CoreDashboard.create_by == str(user.id),
+        CoreDashboard.workspace_id == str(user.oid if user.oid is not None else 1)
+    ).first()
+
+    if not record:
+        raise ValueError(f"Dashboard with id {dashboard.id} does not exist or you do not have permission to update it")
+
     record.name = dashboard.name
     record.update_by = user.id
     record.update_time = int(time.time())
@@ -102,7 +111,16 @@ def create_canvas(session: SessionDep, user: CurrentUser, dashboard: CreateDashb
 
 
 def update_canvas(session: SessionDep, user: CurrentUser, dashboard: CreateDashboard):
-    record = session.query(CoreDashboard).filter(CoreDashboard.id == dashboard.id).first()
+    # 添加权限检查：只能更新自己创建的、且在自己工作空间的 Dashboard
+    record = session.query(CoreDashboard).filter(
+        CoreDashboard.id == dashboard.id,
+        CoreDashboard.create_by == str(user.id),
+        CoreDashboard.workspace_id == str(user.oid if user.oid is not None else 1)
+    ).first()
+
+    if not record:
+        raise ValueError(f"Dashboard with id {dashboard.id} does not exist or you do not have permission to update it")
+
     record.name = dashboard.name
     record.update_by = user.id
     record.update_time = int(time.time())
